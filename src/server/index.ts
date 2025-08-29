@@ -1,9 +1,13 @@
 import { Hono } from 'hono'
+import { OpenAPIHono } from '@hono/zod-openapi'
 import { cors } from 'hono/cors'
 import { streamText } from 'ai'
 import { createWorkersAI } from 'workers-ai-provider'
 import { AIChatWebSocket } from './ai-chat-websocket'
+import { VoiceAIWebSocket } from './voice-ai-websocket'
 import { createAuth } from '../../server/auth/config'
+import * as routes from './routes'
+import { z } from '@hono/zod-openapi'
 // import { runWithTools } from '@cloudflare/ai-utils'
 
 // Cloudflare Workers type definitions
@@ -56,6 +60,7 @@ export interface Env {
   SESSIONS: KVNamespace;
   ASSETS: Fetcher;
   AI_CHAT_WEBSOCKET: DurableObjectNamespace;
+  VOICE_AI_WEBSOCKET: DurableObjectNamespace;
   BETTER_AUTH_SECRET?: string;
   BETTER_AUTH_URL?: string;
   GOOGLE_CLIENT_ID?: string;
@@ -64,11 +69,108 @@ export interface Env {
   GITHUB_CLIENT_SECRET?: string;
   GOOGLE_API_KEY?: string;
   AI_GATEWAY_URL?: string;
+  ELEVENLABS_API_KEY?: string;
+  DEEPGRAM_API_KEY?: string;
 }
 
-const app = new Hono<{ Bindings: Env }>()
+const app = new OpenAPIHono<{ Bindings: Env }>()
 
 app.use('*', cors())
+
+// OpenAPI documentation
+app.doc('/api/docs', {
+  openapi: '3.0.0',
+  info: {
+    version: '1.0.0',
+    title: 'Shadcn Admin API',
+    description: 'API for the Shadcn Admin Cloudflare application',
+  },
+  servers: [
+    {
+      url: 'http://localhost:5173',
+      description: 'Development server',
+    },
+  ],
+  tags: [
+    { name: 'Health', description: 'Health check endpoints' },
+    { name: 'Tasks', description: 'Task management endpoints' },
+    { name: 'Users', description: 'User management endpoints' },
+    { name: 'AI Chat', description: 'AI chat endpoints' },
+    { name: 'Authentication', description: 'Better Auth authentication endpoints (see /api/auth/reference for full docs)' },
+    { name: 'Test', description: 'Test endpoints' },
+  ],
+})
+
+// Swagger UI
+app.get('/api/ui', (c) => {
+  return c.html(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Shadcn Admin API Documentation</title>
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5.10.5/swagger-ui.css" />
+  <style>
+    html {
+      box-sizing: border-box;
+      overflow: -moz-scrollbars-vertical;
+      overflow-y: scroll;
+    }
+    *, *:before, *:after {
+      box-sizing: inherit;
+    }
+    body {
+      margin: 0;
+      background: #fafafa;
+    }
+    .auth-notice {
+      background: #e3f2fd;
+      border: 1px solid #2196f3;
+      border-radius: 4px;
+      padding: 16px;
+      margin: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .auth-notice h3 {
+      margin: 0 0 8px 0;
+      color: #1976d2;
+    }
+    .auth-notice a {
+      color: #1976d2;
+      text-decoration: none;
+    }
+    .auth-notice a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="auth-notice">
+    <h3>📚 Authentication Documentation</h3>
+    <p>For complete Better Auth endpoint documentation, visit: <a href="/api/auth/reference" target="_blank">/api/auth/reference</a></p>
+    <p>This includes login, registration, OAuth, session management, and all other auth endpoints.</p>
+  </div>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5.10.5/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.10.5/swagger-ui-standalone-preset.js"></script>
+  <script>
+    window.onload = function() {
+      const ui = SwaggerUIBundle({
+        url: '/api/docs',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIStandalonePreset
+        ],
+        plugins: [
+          SwaggerUIBundle.plugins.DownloadUrl
+        ],
+        layout: "StandaloneLayout"
+      });
+    };
+  </script>
+</body>
+</html>`)
+})
 
 // Better Auth routes
 app.all('/api/auth/*', async (c) => {
@@ -1304,14 +1406,38 @@ app.post('/api/users', async (c) => {
   }
 })
 
-// Test route
-app.get('/api/test', (c) => {
-  return c.json({ message: 'Test route works!' })
+// OpenAPI Test route
+app.openapi(routes.testRoute, (c) => {
+  return c.json({
+    message: 'API is working!',
+    timestamp: new Date().toISOString()
+  })
+})
+
+// OpenAPI Status route (demonstrates how easy it is to add new documented routes)
+app.openapi(routes.statusRoute, (c) => {
+  return c.json(
+    {
+      service: 'Shadcn Admin API',
+      status: 'online' as const,
+      uptime: Math.floor(process.uptime?.() || 0),
+      requests: Math.floor(Math.random() * 10000), // Mock data
+    },
+    200
+  )
 })
 
 // Health check
-app.get('/api/health', (c) => {
-  return c.json({ status: 'ok', timestamp: new Date().toISOString() })
+// OpenAPI Health endpoint
+app.openapi(routes.healthRoute, (c) => {
+  return c.json(
+    { 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      version: '1.0.0'
+    },
+    200
+  )
 })
 
 // WebSocket endpoint for AI chat (must come before catch-all route)
@@ -1345,6 +1471,40 @@ app.get('/ws/ai-chat', async (c) => {
   } catch (error) {
     console.error('Durable Object error:', error)
     return c.text('WebSocket connection failed', 500)
+  }
+})
+
+// WebSocket endpoint for Voice AI (must come before catch-all route)
+app.get('/ws/voice-ai', async (c) => {
+  console.log('Voice AI WebSocket endpoint hit:', c.req.path)
+  console.log('Headers:', Object.fromEntries(c.req.raw.headers.entries()))
+  
+  // Check for WebSocket upgrade header
+  const upgradeHeader = c.req.header('upgrade')
+  console.log('Upgrade header:', upgradeHeader)
+  
+  if (upgradeHeader !== 'websocket') {
+    console.log('Missing websocket upgrade header')
+    return c.text('Expected Upgrade: websocket', 426)
+  }
+
+  console.log('Checking Voice AI Durable Object binding...')
+  if (!c.env.VOICE_AI_WEBSOCKET) {
+    console.error('VOICE_AI_WEBSOCKET binding not available - check wrangler.toml configuration')
+    return c.text('Voice AI WebSocket service unavailable', 503)
+  }
+
+  try {
+    console.log('Getting Voice AI Durable Object instance...')
+    const id = c.env.VOICE_AI_WEBSOCKET.idFromName('voice-ai-session')
+    const stub = c.env.VOICE_AI_WEBSOCKET.get(id)
+    
+    console.log('Forwarding to Voice AI Durable Object...')
+    // Forward the request to the Durable Object
+    return stub.fetch(c.req.raw)
+  } catch (error) {
+    console.error('Voice AI Durable Object error:', error)
+    return c.text('Voice AI WebSocket connection failed', 500)
   }
 })
 
@@ -1400,4 +1560,4 @@ app.get('*', async (c) => {
 
 
 export default app
-export { AIChatWebSocket }
+export { AIChatWebSocket, VoiceAIWebSocket }

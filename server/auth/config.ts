@@ -1,7 +1,7 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { withCloudflare } from 'better-auth-cloudflare';
-import { anonymous } from 'better-auth/plugins';
+import { anonymous, openAPI } from 'better-auth/plugins';
 import { drizzle } from 'drizzle-orm/d1';
 import * as schema from '../../database/auth.schema';
 import type { Env } from '../../worker';
@@ -29,7 +29,7 @@ export function createAuth(env: Env, cf?: any) {
         emailAndPassword: {
           enabled: true,
         },
-        plugins: [anonymous()],
+        plugins: [anonymous(), openAPI()],
         rateLimit: {
           enabled: true,
         },

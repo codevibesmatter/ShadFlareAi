@@ -34,10 +34,10 @@ This is a full-stack React admin dashboard built for Cloudflare Workers with the
 
 ### Backend Stack
 - **Cloudflare Workers** for serverless compute
-- **Hono** as the web framework
+- **Hono** with **OpenAPI** integration for the web framework
 - **D1** for the database (SQLite)
 - **KV** for key-value storage
-- **Better Auth** for authentication
+- **Better Auth** for authentication with OpenAPI documentation
 - **Drizzle ORM** for database operations
 - **Cloudflare AI** for AI chat functionality
 
@@ -104,6 +104,16 @@ The `@cloudflare/vite-plugin` provides seamless integration between Vite and the
 - Remove any server proxy configuration from vite.config.ts - the plugin handles routing internally
 - Set `appType: 'spa'` in vite.config.ts for proper SPA fallback
 - The worker handles SPA fallback by serving index.html for non-API routes when ASSETS is unavailable (development)
+
+## API Documentation
+
+The application uses OpenAPI documentation with interactive testing:
+
+- **API Docs**: `http://localhost:5173/api/ui` - Swagger UI for all endpoints
+- **Auth Docs**: `http://localhost:5173/api/auth/reference` - Better Auth endpoints
+- **OpenAPI Schema**: `http://localhost:5173/api/docs` - JSON specification
+
+New routes defined in `src/server/routes/` with Zod schemas automatically appear in documentation.
 
 ## Testing Commands
 No specific test commands are configured. Check with the user if testing setup is needed.
