@@ -1,0 +1,45 @@
+name = "shadcn-admin-cf-ai"
+main = "worker.ts"
+compatibility_date = "2024-12-30"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "shadcn-admin-db"
+database_id = "YOUR_DATABASE_ID"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "YOUR_KV_NAMESPACE_ID"
+
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "YOUR_SESSIONS_NAMESPACE_ID"
+
+[ai]
+binding = "AI"
+
+# For development, we'll remove the problematic KV bindings and use minimal config
+[env.development]
+name = "shadcn-admin-dev"
+
+[env.development.ai]
+binding = "AI"
+
+# Assets and SPA configuration
+[assets]
+binding = "ASSETS"
+directory = "./dist/client"
+not_found_handling = "single-page-application"
+
+[vars]
+BETTER_AUTH_URL = "http://localhost:5173"
+GOOGLE_API_KEY = ""
+AI_GATEWAY_URL = ""
+
+[env.production.vars]
+BETTER_AUTH_URL = "https://your-domain.com"
+GOOGLE_CLIENT_ID = ""
+GITHUB_CLIENT_ID = ""
+GOOGLE_API_KEY = ""
+AI_GATEWAY_URL = ""
