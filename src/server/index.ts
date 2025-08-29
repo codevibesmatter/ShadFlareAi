@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { streamText } from 'ai'
 import { createWorkersAI } from 'workers-ai-provider'
+import { AIChatWebSocket } from './ai-chat-websocket'
 // import { runWithTools } from '@cloudflare/ai-utils'
 
 // Cloudflare Workers type definitions
@@ -33,12 +34,27 @@ interface KVNamespace {
   delete(key: string): Promise<void>;
 }
 
+interface DurableObjectNamespace {
+  idFromName(name: string): DurableObjectId;
+  idFromString(id: string): DurableObjectId;
+  get(id: DurableObjectId): DurableObjectStub;
+}
+
+interface DurableObjectId {
+  toString(): string;
+}
+
+interface DurableObjectStub {
+  fetch(request: RequestInit | Request): Promise<Response>;
+}
+
 export interface Env {
   DB: D1Database;
   AI?: Ai;
   KV: KVNamespace;
   SESSIONS: KVNamespace;
   ASSETS: Fetcher;
+  AI_CHAT_WEBSOCKET: DurableObjectNamespace;
   BETTER_AUTH_SECRET?: string;
   BETTER_AUTH_URL?: string;
   GOOGLE_CLIENT_ID?: string;
@@ -85,9 +101,32 @@ app.post('/api/chat', async (c) => {
         },
         body: JSON.stringify({
           contents: geminiMessages,
+          systemInstruction: {
+            parts: [{ 
+              text: `You are an AI assistant that excels at creating technical diagrams. When creating mermaid diagrams:
+
+1. ALWAYS use proper mermaid markdown syntax with code blocks: \`\`\`mermaid
+2. Use valid mermaid syntax - common patterns:
+   - Flowcharts: \`graph TD\` or \`graph LR\`
+   - Sequence diagrams: \`sequenceDiagram\`
+   - Class diagrams: \`classDiagram\`
+3. Valid flowchart syntax examples:
+   \`\`\`mermaid
+   graph TD
+       A[Start] --> B{Decision}
+       B -->|Yes| C[Action 1]
+       B -->|No| D[Action 2]
+   \`\`\`
+4. Avoid complex arrow labels that might break parsing
+5. Keep node names simple (A, B, C) and use square brackets for labels
+6. Test syntax mentally before outputting
+
+Always prefer simple, working diagrams over complex ones that might fail to render.`
+            }]
+          },
           generationConfig: {
             temperature: 0.7,
-            maxOutputTokens: 500,
+            maxOutputTokens: 800,
           }
         })
       })
@@ -282,6 +321,115 @@ const tools = {
         };
       } catch (error) {
         return { error: "Failed to get current time" };
+      }
+    }
+  },
+
+  // Validate mermaid diagram syntax
+  validateMermaidDiagram: {
+    description: "Validates mermaid diagram syntax and provides corrected version if needed",
+    parameters: {
+      type: "object",
+      properties: {
+        mermaidCode: {
+          type: "string",
+          description: "The mermaid diagram code to validate"
+        },
+        diagramType: {
+          type: "string",
+          description: "Type of diagram (flowchart, sequence, class, etc.)",
+          enum: ["flowchart", "sequence", "class", "state", "entity-relationship", "user-journey", "gantt"]
+        }
+      },
+      required: ["mermaidCode"]
+    },
+    function: async ({ mermaidCode, diagramType }: { mermaidCode: string, diagramType?: string }) => {
+      try {
+        // Basic validation patterns for common mermaid syntax errors
+        const validationResult = {
+          isValid: true,
+          errors: [] as string[],
+          suggestions: [] as string[],
+          correctedCode: mermaidCode
+        };
+
+        // Check for common syntax errors
+        if (!mermaidCode.trim()) {
+          validationResult.isValid = false;
+          validationResult.errors.push("Empty mermaid code");
+          return validationResult;
+        }
+
+        // Check for proper diagram declaration
+        const lines = mermaidCode.trim().split('\n');
+        const firstLine = lines[0].trim();
+        
+        if (!firstLine.match(/^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt)/)) {
+          validationResult.isValid = false;
+          validationResult.errors.push("Missing or invalid diagram type declaration");
+          validationResult.suggestions.push("Start with: graph TD, sequenceDiagram, classDiagram, etc.");
+        }
+
+        // Check for common flowchart issues
+        if (firstLine.startsWith('graph') || firstLine.startsWith('flowchart')) {
+          // Check for invalid arrow syntax
+          const invalidArrows = mermaidCode.match(/-->\|[^|]*\|>/g);
+          if (invalidArrows) {
+            validationResult.isValid = false;
+            validationResult.errors.push("Invalid arrow label syntax found");
+            validationResult.suggestions.push("Use: A -->|label| B instead of A -->|label|> B");
+            
+            // Try to fix arrow syntax
+            let corrected = mermaidCode.replace(/-->\|([^|]*)\|>/g, '-->|$1|');
+            validationResult.correctedCode = corrected;
+          }
+
+          // Check for node naming issues
+          const complexNodeNames = mermaidCode.match(/[A-Za-z0-9_-]+\[[^\]]*\]/g);
+          if (complexNodeNames) {
+            for (const node of complexNodeNames) {
+              if (node.includes('-->') || node.includes('|')) {
+                validationResult.errors.push(`Potentially problematic node: ${node}`);
+                validationResult.suggestions.push("Keep node definitions simple: A[Label]");
+              }
+            }
+          }
+        }
+
+        // Provide diagram-specific templates if validation fails
+        if (!validationResult.isValid && diagramType) {
+          const templates = {
+            flowchart: `graph TD
+    A[Start] --> B{Decision}
+    B -->|Yes| C[Action 1]
+    B -->|No| D[Action 2]
+    C --> E[End]
+    D --> E`,
+            sequence: `sequenceDiagram
+    participant A as Alice
+    participant B as Bob
+    A->>B: Hello Bob
+    B-->>A: Hello Alice`,
+            class: `classDiagram
+    class Animal {
+        +String name
+        +makeSound()
+    }
+    Animal <|-- Dog`
+          };
+          
+          if (templates[diagramType as keyof typeof templates]) {
+            validationResult.suggestions.push(`Try this ${diagramType} template: ${templates[diagramType as keyof typeof templates]}`);
+          }
+        }
+
+        return validationResult;
+      } catch (error) {
+        return { 
+          isValid: false, 
+          error: "Failed to validate mermaid diagram",
+          suggestions: ["Use basic mermaid syntax: graph TD, A[Start] --> B[End]"]
+        };
       }
     }
   },
@@ -1159,6 +1307,40 @@ app.get('/api/health', (c) => {
   return c.json({ status: 'ok', timestamp: new Date().toISOString() })
 })
 
+// WebSocket endpoint for AI chat (must come before catch-all route)
+app.get('/ws/ai-chat', async (c) => {
+  console.log('WebSocket endpoint hit:', c.req.path)
+  console.log('Headers:', Object.fromEntries(c.req.raw.headers.entries()))
+  
+  // Check for WebSocket upgrade header
+  const upgradeHeader = c.req.header('upgrade')
+  console.log('Upgrade header:', upgradeHeader)
+  
+  if (upgradeHeader !== 'websocket') {
+    console.log('Missing websocket upgrade header')
+    return c.text('Expected Upgrade: websocket', 426)
+  }
+
+  console.log('Checking Durable Object binding...')
+  if (!c.env.AI_CHAT_WEBSOCKET) {
+    console.error('AI_CHAT_WEBSOCKET binding not available - check wrangler.toml configuration')
+    return c.text('WebSocket service unavailable', 503)
+  }
+
+  try {
+    console.log('Getting Durable Object instance...')
+    const id = c.env.AI_CHAT_WEBSOCKET.idFromName('ai-chat-session')
+    const stub = c.env.AI_CHAT_WEBSOCKET.get(id)
+    
+    console.log('Forwarding to Durable Object...')
+    // Forward the request to the Durable Object
+    return stub.fetch(c.req.raw)
+  } catch (error) {
+    console.error('Durable Object error:', error)
+    return c.text('WebSocket connection failed', 500)
+  }
+})
+
 // Handle static assets and SPA routing
 app.get('*', async (c) => {
   // Skip API routes - they should be handled above
@@ -1202,4 +1384,6 @@ app.get('*', async (c) => {
   }
 })
 
+
 export default app
+export { AIChatWebSocket }
