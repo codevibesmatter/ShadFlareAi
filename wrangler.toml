@@ -26,11 +26,19 @@ name = "shadcn-admin-dev"
 [env.development.ai]
 binding = "AI"
 
-# Assets and SPA configuration
-[assets]
-binding = "ASSETS"
-directory = "./dist/client"
-not_found_handling = "single-page-application"
+# Assets and SPA configuration (temporarily disabled for WebSocket testing)
+# [assets]
+# binding = "ASSETS"
+# directory = "./dist/client"
+# not_found_handling = "single-page-application"
+
+[[durable_objects.bindings]]
+name = "AI_CHAT_WEBSOCKET"
+class_name = "AIChatWebSocket"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AIChatWebSocket"]
 
 [vars]
 BETTER_AUTH_URL = "http://localhost:5173"

@@ -1,0 +1,831 @@
+import { DurableObject } from 'cloudflare:workers'
+
+interface ChatSession {
+  id: string
+  socket: WebSocket
+  model: string
+  messages: Array<{ role: 'user' | 'assistant', content: string }>
+}
+
+export class AIChatWebSocket extends DurableObject {
+  private sessions = new Map<WebSocket, ChatSession>()
+  private env: any
+
+  constructor(ctx: any, env: any) {
+    super(ctx, env)
+    
+    // Store the environment for later access
+    this.env = env
+    
+    // Initialize SQLite table for message history
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+    
+    // Restore hibernating WebSocket connections
+    console.log('🔄 Initializing Durable Object, restoring WebSocket sessions...')
+    console.log('🔍 Available environment bindings:', Object.keys(env))
+    console.log('🤖 AI binding available:', !!env.AI)
+    
+    this.ctx.getWebSockets().forEach((ws: WebSocket) => {
+      const attachment = ws.deserializeAttachment()
+      if (attachment) {
+        console.log('🔄 Restoring session from hibernation:', attachment.id)
+        this.sessions.set(ws, {
+          id: attachment.id,
+          socket: ws,
+          model: attachment.model,
+          messages: [] // Messages loaded from SQLite on demand
+        })
+      }
+    })
+    console.log('✅ Restored', this.sessions.size, 'WebSocket sessions')
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    console.log('Durable Object fetch called for WebSocket upgrade')
+    
+    // Check if this is a WebSocket upgrade request
+    const upgradeHeader = request.headers.get('Upgrade')
+    if (upgradeHeader !== 'websocket') {
+      return new Response('Expected Upgrade: websocket', { status: 426 })
+    }
+
+    // Create WebSocket pair
+    const webSocketPair = new WebSocketPair()
+    const [client, server] = Object.values(webSocketPair)
+
+    // Generate session ID
+    const sessionId = crypto.randomUUID()
+
+    // Get model and initial parameters from URL
+    const url = new URL(request.url)
+    const model = url.searchParams.get('model') || 'llama-3-8b'
+    
+    console.log('Creating session:', sessionId, 'for model:', model)
+
+    // Create session and store it with server socket as key for hibernation events
+    const session: ChatSession = {
+      id: sessionId,
+      socket: server,
+      model,
+      messages: []
+    }
+
+    // Store session using WebSocket as key (proper hibernation pattern)
+    this.sessions.set(server, session)
+
+    // Store minimal session metadata for hibernation restoration
+    server.serializeAttachment({
+      id: sessionId,
+      model
+    })
+    
+    // Accept the WebSocket connection for hibernation - this MUST be called last
+    this.ctx.acceptWebSocket(server)
+    console.log('WebSocket accepted by Durable Object for session:', sessionId)
+
+    // Send immediate connection confirmation since hibernation events may not trigger in dev
+    try {
+      const connectionMessage = JSON.stringify({
+        type: 'connection',
+        sessionId: session.id,
+        model: session.model,
+        message: 'Connected to AI chat'
+      })
+      server.send(connectionMessage)
+      console.log('Sent immediate connection confirmation for session:', sessionId)
+    } catch (error) {
+      console.error('Error sending immediate connection confirmation:', error)
+    }
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client
+    })
+  }
+
+  // Note: webSocketOpen doesn't exist in hibernation API
+  // Connection messages are sent immediately in fetch() method
+
+  // WebSocket hibernation handler for messages
+  async webSocketMessage(ws: WebSocket, message: ArrayBuffer | string) {
+    try {
+      const data = typeof message === 'string' ? message : new TextDecoder().decode(message)
+      const parsedMessage = JSON.parse(data)
+      
+      console.log('💬 WebSocket message received:', parsedMessage)
+      
+      // Get session directly from WebSocket key (proper hibernation pattern)
+      const session = this.sessions.get(ws)
+      
+      if (!session) {
+        console.error('❌ Session not found for WebSocket. Available sessions:', this.sessions.size)
+        // Try to restore session from attachment
+        const attachment = ws.deserializeAttachment()
+        if (attachment) {
+          console.log('🔄 Restoring session from attachment:', attachment.id)
+          const restoredSession: ChatSession = {
+            id: attachment.id,
+            socket: ws,
+            model: attachment.model,
+            messages: attachment.messages || []
+          }
+          this.sessions.set(ws, restoredSession)
+          console.log('✅ Session restored from attachment')
+        } else {
+          ws.send(JSON.stringify({ type: 'error', message: 'Session not found and cannot be restored' }))
+          return
+        }
+      }
+      
+      const currentSession = this.sessions.get(ws)!
+      console.log('✅ Found session:', currentSession.id, 'for message type:', parsedMessage.type)
+      
+      switch (parsedMessage.type) {
+        case 'chat':
+          await this.handleChatMessage(currentSession, parsedMessage)
+          break
+        case 'ping':
+          ws.send(JSON.stringify({ type: 'pong' }))
+          break
+        case 'change_model':
+          currentSession.model = parsedMessage.model
+          // Update attachment with new model
+          ws.serializeAttachment({
+            id: currentSession.id,
+            model: parsedMessage.model,
+            messages: currentSession.messages
+          })
+          ws.send(JSON.stringify({ 
+            type: 'model_changed', 
+            model: parsedMessage.model 
+          }))
+          break
+      }
+    } catch (error) {
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: 'Invalid message format'
+      }))
+    }
+  }
+
+  // WebSocket hibernation handler for close events
+  async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean) {
+    console.log('🔌 WebSocket closed:', code, reason)
+    // Remove the session for this WebSocket (using WebSocket as key)
+    const session = this.sessions.get(ws)
+    if (session) {
+      console.log('🗑️ Removing session:', session.id)
+      this.sessions.delete(ws)
+    }
+  }
+
+  // SQLite helper methods
+  private loadMessagesFromDB(sessionId: string): Array<{role: string, content: string}> {
+    const cursor = this.ctx.storage.sql.exec(
+      'SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp ASC LIMIT 50',
+      sessionId
+    )
+    return cursor.toArray()
+  }
+
+  private saveMessageToDB(sessionId: string, role: string, content: string) {
+    this.ctx.storage.sql.exec(
+      'INSERT INTO chat_messages (session_id, role, content) VALUES (?, ?, ?)',
+      sessionId,
+      role,
+      content
+    )
+  }
+
+  private async handleChatMessage(session: ChatSession, message: any) {
+    try {
+      // Load recent message history from SQLite
+      session.messages = this.loadMessagesFromDB(session.id)
+      
+      // Add user message to history and save to SQLite
+      const userMessage = { role: 'user' as const, content: message.content }
+      session.messages.push(userMessage)
+      this.saveMessageToDB(session.id, 'user', message.content)
+
+      // Send acknowledgment
+      session.socket.send(JSON.stringify({
+        type: 'message_received',
+        messageId: message.messageId
+      }))
+
+      // Check if function calling is enabled
+      const enableFunctionCalling = message.enableFunctionCalling && 
+        (session.model === 'hermes-2-pro' || session.model === 'gemini-2.5-flash-lite')
+
+      if (enableFunctionCalling) {
+        await this.handleFunctionCallingChat(session, message)
+      } else {
+        await this.handleStreamingChat(session, message)
+      }
+
+    } catch (error) {
+      session.socket.send(JSON.stringify({
+        type: 'error',
+        message: 'Failed to process chat message',
+        error: error instanceof Error ? error.message : String(error)
+      }))
+    }
+  }
+
+  private async handleStreamingChat(session: ChatSession, message: any) {
+    try {
+      // Send stream start
+      session.socket.send(JSON.stringify({
+        type: 'stream_start',
+        messageId: message.messageId
+      }))
+
+      // For Gemini streaming, we'll use the AI Gateway WebSocket API
+      // For now, simulate streaming with the existing HTTP API
+      if (session.model === 'gemini-2.5-flash-lite') {
+        // Use Gemini API directly for streaming
+        const response = await this.streamGeminiResponse(session, message)
+        return response
+      } else {
+        // Use Cloudflare Workers AI for streaming
+        const response = await this.streamWorkersAIResponse(session, message)
+        return response
+      }
+
+    } catch (error) {
+      session.socket.send(JSON.stringify({
+        type: 'stream_error',
+        messageId: message.messageId,
+        error: error instanceof Error ? error.message : String(error)
+      }))
+    }
+  }
+
+  private async handleFunctionCallingChat(session: ChatSession, message: any) {
+    // Function calling implementation
+    session.socket.send(JSON.stringify({
+      type: 'function_calling_start',
+      messageId: message.messageId
+    }))
+
+    try {
+      // Use existing function calling logic but send results via WebSocket
+      const result = await this.processFunctionCalling(session, message)
+      
+      session.socket.send(JSON.stringify({
+        type: 'function_calling_complete',
+        messageId: message.messageId,
+        content: result
+      }))
+
+      // Save assistant message to SQLite
+      if (result.trim().length > 0) {
+        this.saveMessageToDB(session.id, 'assistant', result)
+        session.messages.push({ role: 'assistant', content: result })
+      }
+      
+      // Update WebSocket attachment with minimal session info
+      session.socket.serializeAttachment({
+        id: session.id,
+        model: session.model
+      })
+
+    } catch (error) {
+      session.socket.send(JSON.stringify({
+        type: 'function_calling_error',
+        messageId: message.messageId,
+        error: error instanceof Error ? error.message : String(error)
+      }))
+    }
+  }
+
+  private async streamGeminiResponse(session: ChatSession, message: any) {
+    try {
+      console.log('🚀 Starting Gemini streaming for message:', message.messageId)
+
+      // Get environment from Durable Object context - access via this.env
+      const env = this.env as any
+      
+      if (!env.GOOGLE_API_KEY) {
+        throw new Error('Google API key not configured')
+      }
+
+      // Use AI Gateway URL if configured, otherwise direct Google API
+      const baseUrl = env.AI_GATEWAY_URL || 'https://generativelanguage.googleapis.com'
+      const apiUrl = `${baseUrl}/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?key=${env.GOOGLE_API_KEY}`
+
+      // Convert messages to Gemini format
+      const geminiMessages = session.messages.map(msg => ({
+        role: msg.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: msg.content }]
+      }))
+
+      console.log('📡 Making Gemini API request to:', apiUrl)
+      
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: geminiMessages,
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 800,
+          }
+        })
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('❌ Gemini API error:', errorText)
+        throw new Error(`Gemini API error: ${errorText}`)
+      }
+
+      console.log('📥 Reading Gemini streaming response...')
+
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('No response body')
+
+      let fullContent = ''
+      
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          const text = new TextDecoder().decode(value)
+          const lines = text.split('\n')
+
+          for (const line of lines) {
+            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+              try {
+                const data = JSON.parse(line.slice(6))
+                const content = data.candidates?.[0]?.content?.parts?.[0]?.text
+                
+                if (content) {
+                  console.log('📝 Gemini chunk:', content.substring(0, 50) + '...')
+                  fullContent += content
+                  
+                  session.socket.send(JSON.stringify({
+                    type: 'stream_chunk',
+                    messageId: message.messageId,
+                    content: content,
+                    done: false
+                  }))
+                }
+              } catch (e) {
+                console.warn('⚠️ Failed to parse Gemini chunk:', e)
+              }
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock()
+      }
+
+      // Send completion signal
+      session.socket.send(JSON.stringify({
+        type: 'stream_chunk',
+        messageId: message.messageId,
+        content: '',
+        done: true
+      }))
+
+      // Save assistant message to SQLite
+      if (fullContent.trim().length > 0) {
+        this.saveMessageToDB(session.id, 'assistant', fullContent)
+        session.messages.push({ role: 'assistant', content: fullContent })
+      }
+      
+      // Update WebSocket attachment with minimal session info
+      session.socket.serializeAttachment({
+        id: session.id,
+        model: session.model
+      })
+      
+      console.log('✅ Gemini streaming completed')
+
+    } catch (error) {
+      console.error('❌ Gemini streaming error:', error)
+      session.socket.send(JSON.stringify({
+        type: 'stream_error',
+        messageId: message.messageId,
+        error: error instanceof Error ? error.message : String(error)
+      }))
+    }
+  }
+
+  private async streamWorkersAIResponse(session: ChatSession, message: any) {
+    try {
+      console.log('🚀 Starting Workers AI streaming for message:', message.messageId)
+
+      // Get environment from Durable Object context - access via this.env
+      const env = this.env as any
+      
+      if (!env.AI) {
+        throw new Error('AI binding not available')
+      }
+
+      // Map model names to Cloudflare AI model IDs
+      const modelMap = {
+        'llama-3-8b': '@cf/meta/llama-3-8b-instruct',
+        'mistral-7b': '@cf/mistral/mistral-7b-instruct-v0.1',
+        'qwen-1.5': '@cf/qwen/qwen1.5-14b-chat-awq',
+        'codellama': '@cf/meta/code-llama-7b-instruct-awq',
+        'hermes-2-pro': '@hf/nousresearch/hermes-2-pro-mistral-7b',
+      }
+
+      const modelId = modelMap[session.model as keyof typeof modelMap] || modelMap['llama-3-8b']
+      console.log('🤖 Using Workers AI model:', modelId)
+
+      // Convert message history to Workers AI format
+      const messages = session.messages.map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }))
+
+      console.log('📡 Making Workers AI request...')
+      
+      // Call Workers AI with streaming
+      const response = await env.AI.run(modelId, {
+        messages: messages,
+        max_tokens: 4000, // Much larger for complete responses
+        temperature: 0.7,
+        stream: true
+      })
+
+      console.log('📥 Processing Workers AI streaming response...')
+
+      if (response && typeof response[Symbol.asyncIterator] === 'function') {
+        // Handle async iterator streaming response
+        let fullContent = ''
+        let buffer = ''
+        let contentBuffer = ''
+        const CHUNK_SIZE = 100 // Optimal chunk size for better streaming UX (50-100 chars)
+        let lastSentTime = Date.now()
+        const MIN_DELAY = 150 // Minimum delay between chunks (ms)
+        
+        const sendChunk = (content: string, isDone: boolean = false) => {
+          if (content.length > 0 || isDone) {
+            session.socket.send(JSON.stringify({
+              type: 'stream_chunk',
+              messageId: message.messageId,
+              content: content,
+              done: isDone
+            }))
+          }
+        }
+        
+        for await (const chunk of response) {
+          // Handle Uint8Array chunks (decode to string)
+          if (chunk instanceof Uint8Array) {
+            const chunkText = new TextDecoder().decode(chunk)
+            buffer += chunkText
+            
+            // Process complete lines from buffer
+            const lines = buffer.split('\n')
+            // Keep the last incomplete line in buffer
+            buffer = lines.pop() || ''
+            
+            for (const line of lines) {
+              if (line.trim().startsWith('data: ')) {
+                try {
+                  const jsonData = JSON.parse(line.trim().substring(6))
+                  const content = jsonData.response
+                  
+                  if (content && typeof content === 'string' && content.length > 0) {
+                    fullContent += content
+                    contentBuffer += content
+                    
+                    // Send chunk when buffer reaches optimal size or after minimum delay
+                    const now = Date.now()
+                    if (contentBuffer.length >= CHUNK_SIZE || (now - lastSentTime) >= MIN_DELAY) {
+                      sendChunk(contentBuffer)
+                      contentBuffer = ''
+                      lastSentTime = now
+                    }
+                  }
+                } catch (e) {
+                  // Ignore parse errors for incomplete lines
+                  if (line.trim() !== 'data: [DONE]') {
+                    console.log('⚠️ Failed to parse:', line.substring(0, 100))
+                  }
+                }
+              }
+            }
+          } else if (chunk && typeof chunk === 'object') {
+            const content = chunk.response || chunk.content || (chunk.choices?.[0]?.delta?.content)
+            
+            if (content && typeof content === 'string') {
+              fullContent += content
+              contentBuffer += content
+              
+              // Send chunk when buffer reaches optimal size
+              const now = Date.now()
+              if (contentBuffer.length >= CHUNK_SIZE || (now - lastSentTime) >= MIN_DELAY) {
+                sendChunk(contentBuffer)
+                contentBuffer = ''
+                lastSentTime = now
+              }
+            }
+          }
+        }
+        
+        // Send any remaining content in buffer
+        if (contentBuffer.length > 0) {
+          sendChunk(contentBuffer)
+        }
+
+        // Send completion signal with proper timing
+        setTimeout(() => {
+          session.socket.send(JSON.stringify({
+            type: 'stream_chunk',
+            messageId: message.messageId,
+            content: '',
+            done: true
+          }))
+        }, 50) // Small delay to ensure all chunks are processed
+
+        // Save assistant message to SQLite
+        if (fullContent.trim().length > 0) {
+          this.saveMessageToDB(session.id, 'assistant', fullContent)
+          session.messages.push({ role: 'assistant', content: fullContent })
+        }
+        
+        // Update WebSocket attachment with minimal session info (no messages)
+        session.socket.serializeAttachment({
+          id: session.id,
+          model: session.model
+        })
+        
+        console.log('✅ Workers AI streaming completed')
+
+      } else if (response && typeof response === 'object' && response.response) {
+        // Handle non-streaming response
+        const content = response.response
+        console.log('📝 Workers AI non-streaming response:', content.substring(0, 50) + '...')
+        
+        session.socket.send(JSON.stringify({
+          type: 'stream_chunk',
+          messageId: message.messageId,
+          content: content,
+          done: true
+        }))
+
+        // Save assistant message to SQLite
+        if (content.trim().length > 0) {
+          this.saveMessageToDB(session.id, 'assistant', content)
+          session.messages.push({ role: 'assistant', content: content })
+        }
+        
+        // Update WebSocket attachment with minimal session info
+        session.socket.serializeAttachment({
+          id: session.id,
+          model: session.model
+        })
+        
+        console.log('✅ Workers AI response completed')
+
+      } else {
+        throw new Error('Unexpected response format from Workers AI')
+      }
+
+    } catch (error) {
+      console.error('❌ Workers AI streaming error:', error)
+      session.socket.send(JSON.stringify({
+        type: 'stream_error',
+        messageId: message.messageId,
+        error: error instanceof Error ? error.message : String(error)
+      }))
+    }
+  }
+
+  private async processFunctionCalling(session: ChatSession, message: any): Promise<string> {
+    try {
+      console.log('🔧 Starting function calling for message:', message.messageId)
+
+      // Get environment from Durable Object context - access via this.env
+      const env = this.env as any
+      
+      if (session.model === 'gemini-2.5-flash-lite') {
+        return await this.processGeminiFunctionCalling(session, message, env)
+      } else {
+        return await this.processWorkersFunctionCalling(session, message, env)
+      }
+
+    } catch (error) {
+      console.error('❌ Function calling error:', error)
+      throw error
+    }
+  }
+
+  private async processGeminiFunctionCalling(session: ChatSession, message: any, env: any): Promise<string> {
+    if (!env.GOOGLE_API_KEY) {
+      throw new Error('Google API key not configured')
+    }
+
+    // Use AI Gateway URL if configured, otherwise direct Google API
+    const baseUrl = env.AI_GATEWAY_URL || 'https://generativelanguage.googleapis.com'
+    const apiUrl = `${baseUrl}/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${env.GOOGLE_API_KEY}`
+    
+    // Define tools in Gemini format
+    const geminiTools = [{
+      function_declarations: [
+        {
+          name: "calculate",
+          description: "Performs basic mathematical calculations",
+          parameters: {
+            type: "object",
+            properties: {
+              expression: {
+                type: "string",
+                description: "The mathematical expression to evaluate"
+              }
+            },
+            required: ["expression"]
+          }
+        },
+        {
+          name: "getCurrentTime",
+          description: "Gets the current date and time",
+          parameters: {
+            type: "object",
+            properties: {
+              timezone: {
+                type: "string",
+                description: "Timezone (default: UTC)"
+              }
+            }
+          }
+        }
+      ]
+    }]
+    
+    // Convert messages to Gemini format
+    const geminiMessages = session.messages.map(msg => ({
+      role: msg.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: msg.content }]
+    }))
+    
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: geminiMessages,
+        tools: geminiTools,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 500,
+        }
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`Gemini API error: ${errorText}`)
+    }
+
+    const data = await response.json()
+    const candidate = data.candidates?.[0]
+    
+    if (!candidate) {
+      throw new Error('No response candidate from Gemini')
+    }
+    
+    let finalResponse = ''
+    
+    if (candidate.content?.parts) {
+      for (const part of candidate.content.parts) {
+        if (part.functionCall) {
+          const functionResult = await this.executeFunctionCall(part.functionCall.name, part.functionCall.args || {})
+          finalResponse += functionResult + '\n\n'
+        } else if (part.text) {
+          finalResponse += part.text
+        }
+      }
+    }
+    
+    return finalResponse.trim() || 'Function executed successfully'
+  }
+
+  private async processWorkersFunctionCalling(session: ChatSession, message: any, env: any): Promise<string> {
+    if (!env.AI) {
+      throw new Error('AI binding not available')
+    }
+
+    const tools = [
+      {
+        name: "calculate",
+        description: "Performs basic mathematical calculations",
+        parameters: {
+          type: "object",
+          properties: {
+            expression: { type: "string", description: "Mathematical expression to evaluate" }
+          },
+          required: ["expression"]
+        }
+      },
+      {
+        name: "getCurrentTime",
+        description: "Gets the current date and time",
+        parameters: {
+          type: "object",
+          properties: {
+            timezone: { type: "string", description: "Timezone (default: UTC)" }
+          }
+        }
+      }
+    ]
+    
+    const response = await env.AI.run('@hf/nousresearch/hermes-2-pro-mistral-7b', {
+      messages: session.messages,
+      tools: tools,
+      max_tokens: 500,
+      temperature: 0.7
+    })
+    
+    let finalResponse = response.response || ''
+    
+    if (response.tool_calls && response.tool_calls.length > 0) {
+      for (const toolCall of response.tool_calls) {
+        const toolResult = await this.executeFunctionCall(toolCall.name, toolCall.arguments)
+        finalResponse += '\n\n' + toolResult
+      }
+    }
+    
+    return finalResponse.trim() || 'Function executed successfully'
+  }
+
+  private async executeFunctionCall(functionName: string, args: any): Promise<string> {
+    console.log(`🔧 Executing function: ${functionName} with args:`, args)
+    
+    switch (functionName) {
+      case 'calculate':
+        try {
+          const expression = args.expression
+          if (!/^[\d\s+\-*/.()]+$/.test(expression)) {
+            return 'Error: Invalid expression. Only numbers and basic operators are allowed.'
+          }
+          
+          const result = Function('"use strict"; return (' + expression + ')')()
+          if (typeof result !== 'number' || !isFinite(result)) {
+            return 'Error: Invalid mathematical expression'
+          }
+          
+          return `The result of ${expression} is ${result}`
+        } catch (error) {
+          return 'Error: Failed to evaluate expression'
+        }
+        
+      case 'getCurrentTime':
+        try {
+          const timezone = args.timezone || 'UTC'
+          const now = new Date()
+          const timeString = now.toLocaleString('en-US', { 
+            timeZone: timezone,
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            timeZoneName: 'short'
+          })
+          return `Current time in ${timezone}: ${timeString}`
+        } catch (error) {
+          return 'Error: Failed to get current time'
+        }
+        
+      default:
+        return `Error: Unknown function ${functionName}`
+    }
+  }
+
+  async webSocketError(ws: WebSocket, error: any) {
+    console.error('WebSocket error in Durable Object:', error)
+    
+    // Remove the session for this WebSocket (using WebSocket as key)
+    const session = this.sessions.get(ws)
+    if (session) {
+      console.log('🗑️ Removing session due to WebSocket error:', session.id)
+      this.sessions.delete(ws)
+    }
+    
+    // Close the WebSocket with an appropriate error code
+    try {
+      ws.close(1011, 'WebSocket error occurred')
+    } catch (closeError) {
+      console.error('Error closing WebSocket:', closeError)
+    }
+  }
+}

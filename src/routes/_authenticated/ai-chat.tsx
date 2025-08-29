@@ -12,8 +12,8 @@ import { Send, Loader2, Bot, Wrench } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
-import { useState, useRef } from 'react'
-import ReactMarkdown from 'react-markdown'
+import { useState, useRef, useEffect } from 'react'
+import { Streamdown } from 'streamdown'
 import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/conversation'
 import { Message, MessageContent, MessageAvatar } from '@/components/message'
 
@@ -21,6 +21,7 @@ interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  timestamp?: number
 }
 
 function AIChatPage() {
@@ -31,16 +32,252 @@ function AIChatPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [enableFunctionCalling, setEnableFunctionCalling] = useState(false)
+  const [useWebSocket, setUseWebSocket] = useState(true)
+  const [wsConnected, setWsConnected] = useState(false)
+  const [sessionId, setSessionId] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
+  const conversationRef = useRef<HTMLDivElement | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+
+  // Direct WebSocket connection management
+  const connectWebSocket = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      console.log('WebSocket already connected')
+      return
+    }
+
+    console.log('🔄 Connecting to WebSocket...')
+    setError(null)
+    setIsLoading(true)
+
+    try {
+      // Create WebSocket URL
+      const wsUrl = new URL('/ws/ai-chat', window.location.origin)
+      wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsUrl.searchParams.set('model', selectedModel)
+
+      console.log('📡 WebSocket URL:', wsUrl.toString())
+      
+      const ws = new WebSocket(wsUrl.toString())
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        console.log('✅ WebSocket connected successfully!')
+        setWsConnected(true)
+        setIsLoading(false)
+        setError(null)
+      }
+
+      ws.onmessage = (event) => {
+        console.log('📨 WebSocket message received:', event.data)
+        
+        try {
+          const data = JSON.parse(event.data)
+          console.log('📨 Parsed message:', data)
+          
+          switch (data.type) {
+            case 'connection':
+              console.log('🔗 Connection established, session ID:', data.sessionId)
+              setSessionId(data.sessionId)
+              break
+              
+            case 'stream_start':
+              console.log('🚀 Stream started for message:', data.messageId)
+              setMessages(prev => [...prev, {
+                id: data.messageId,
+                role: 'assistant',
+                content: '',
+                timestamp: Date.now()
+              }])
+              break
+
+            case 'stream_chunk':
+              console.log('📝 Stream chunk received:', data.content)
+              setMessages(prev => prev.map(msg =>
+                msg.id === data.messageId
+                  ? { ...msg, content: msg.content + data.content }
+                  : msg
+              ))
+
+              if (data.done) {
+                console.log('✅ Stream completed')
+                setIsLoading(false)
+              }
+              break
+
+            case 'function_calling_complete':
+              console.log('🔧 Function calling completed:', data.content)
+              setMessages(prev => [...prev, {
+                id: data.messageId,
+                role: 'assistant',
+                content: data.content,
+                timestamp: Date.now()
+              }])
+              setIsLoading(false)
+              break
+
+            case 'error':
+            case 'stream_error':
+            case 'function_calling_error':
+              console.error('❌ WebSocket error:', data.message || data.error)
+              setError(data.message || data.error)
+              setIsLoading(false)
+              break
+
+            case 'pong':
+              console.log('🏓 Pong received')
+              break
+
+            default:
+              console.log('❓ Unknown message type:', data.type)
+          }
+        } catch (err) {
+          console.error('❌ Failed to parse WebSocket message:', err, event.data)
+        }
+      }
+
+      ws.onclose = (event) => {
+        console.log('🔌 WebSocket closed:', event.code, event.reason)
+        setWsConnected(false)
+        setIsLoading(false)
+        
+        // Auto-reconnect after 3 seconds if not a clean close
+        if (event.code !== 1000) {
+          setTimeout(() => {
+            console.log('🔄 Attempting to reconnect...')
+            connectWebSocket()
+          }, 3000)
+        }
+      }
+
+      ws.onerror = (event) => {
+        console.error('❌ WebSocket error:', event)
+        setWsConnected(false)
+        setIsLoading(false)
+        setError('WebSocket connection error')
+      }
+
+    } catch (err) {
+      console.error('❌ Failed to create WebSocket connection:', err)
+      setIsLoading(false)
+      setError('Failed to establish WebSocket connection')
+    }
+  }
+
+  const disconnectWebSocket = () => {
+    console.log('🔌 Disconnecting WebSocket...')
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
+    }
+    setWsConnected(false)
+    setSessionId(null)
+  }
+
+  const sendWebSocketMessage = (content: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      console.error('❌ WebSocket not connected')
+      setError('WebSocket not connected. Please try again.')
+      return
+    }
+
+    const messageId = crypto.randomUUID()
+    console.log('📤 Sending message via WebSocket:', content, 'ID:', messageId)
+    
+    // Add user message immediately
+    const userMessage: ChatMessage = {
+      id: `user_${messageId}`,
+      role: 'user',
+      content,
+      timestamp: Date.now()
+    }
+
+    setMessages(prev => [...prev, userMessage])
+    setIsLoading(true)
+    setError(null)
+
+    // Send to WebSocket
+    const wsMessage = {
+      type: 'chat',
+      content,
+      messageId,
+      enableFunctionCalling
+    }
+    
+    console.log('📤 WebSocket message payload:', wsMessage)
+    wsRef.current.send(JSON.stringify(wsMessage))
+  }
+
+  // Connect WebSocket when useWebSocket is enabled
+  useEffect(() => {
+    if (useWebSocket) {
+      connectWebSocket()
+    } else {
+      disconnectWebSocket()
+    }
+
+    // Cleanup on unmount
+    return () => {
+      disconnectWebSocket()
+    }
+  }, [useWebSocket, selectedModel])
+
+  // Auto-scroll effect when messages change
+  useEffect(() => {
+    if (messages.length > 0 && conversationRef.current) {
+      // Use a small timeout to ensure content is rendered
+      setTimeout(() => {
+        const scrollContainer = conversationRef.current?.querySelector('[role="log"]')
+        if (scrollContainer) {
+          // Scroll to bottom with smooth behavior
+          scrollContainer.scrollTo({
+            top: scrollContainer.scrollHeight,
+            behavior: 'smooth'
+          })
+        }
+      }, 100)
+    }
+  }, [messages])
+
+  // Additional effect to handle streaming content updates
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1]
+    
+    if (lastMessage && lastMessage.role === 'assistant' && lastMessage.content) {
+      // Scroll on content updates for streaming
+      setTimeout(() => {
+        const scrollContainer = conversationRef.current?.querySelector('[role="log"]')
+        if (scrollContainer) {
+          const shouldAutoScroll = scrollContainer.scrollTop + scrollContainer.clientHeight + 100 >= scrollContainer.scrollHeight
+          if (shouldAutoScroll) {
+            scrollContainer.scrollTo({
+              top: scrollContainer.scrollHeight,
+              behavior: 'smooth'
+            })
+          }
+        }
+      }, 50)
+    }
+  }, [messages.map(m => m.content).join('')])
   
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInput(e.target.value)
   }
 
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!input.trim() || isLoading) return
+
+    // Use WebSocket or HTTP based on toggle
+    if (useWebSocket) {
+      if (!wsConnected) {
+        setError('WebSocket not connected. Please try again.')
+        return
+      }
+      sendWebSocketMessage(input.trim())
+      setInput('')
+      return
+    }
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
@@ -168,6 +405,18 @@ function AIChatPage() {
             <div className='flex items-center gap-4'>
               <div className='flex items-center gap-2'>
                 <Switch 
+                  id='websocket-mode'
+                  checked={useWebSocket}
+                  onCheckedChange={setUseWebSocket}
+                />
+                <Label htmlFor='websocket-mode' className='flex items-center gap-1 text-sm'>
+                  WebSocket
+                  {wsConnected && <span className='h-2 w-2 bg-green-500 rounded-full ml-1' />}
+                  {sessionId && <span className='text-xs text-muted-foreground ml-1'>({sessionId.slice(0, 8)})</span>}
+                </Label>
+              </div>
+              <div className='flex items-center gap-2'>
+                <Switch 
                   id='function-calling'
                   checked={enableFunctionCalling}
                   onCheckedChange={setEnableFunctionCalling}
@@ -217,39 +466,42 @@ function AIChatPage() {
                   </div>
                 </div>
               ) : (
-                <Conversation className='max-h-[400px]'>
-                  <ConversationContent>
-                    {messages.map((message) => (
-                      <Message key={message.id} from={message.role}>
-                        <MessageAvatar
-                          src={message.role === 'user' ? '/user-avatar.png' : '/bot-avatar.png'}
-                          name={message.role === 'user' ? 'You' : 'AI'}
-                        />
-                        <MessageContent>
-                          <div className='prose prose-sm dark:prose-invert max-w-none'>
-                            <ReactMarkdown>
-                              {message.content}
-                            </ReactMarkdown>
-                          </div>
-                        </MessageContent>
-                      </Message>
-                    ))}
+                <div ref={conversationRef} className='h-full'>
+                  <Conversation className='h-full'>
+                    <ConversationContent>
+                      {messages.map((message) => (
+                        <Message key={message.id} from={message.role}>
+                          <MessageAvatar
+                            src={message.role === 'user' ? '/user-avatar.png' : '/bot-avatar.png'}
+                            name={message.role === 'user' ? 'You' : 'AI'}
+                          />
+                          <MessageContent>
+                            <Streamdown>{message.content}</Streamdown>
+                          </MessageContent>
+                        </Message>
+                      ))}
+                      
+                      {isLoading && (
+                        <Message from="assistant">
+                          <MessageAvatar
+                            src="/bot-avatar.png"
+                            name="AI"
+                          />
+                          <MessageContent>
+                            <div className='flex items-center gap-2'>
+                              <Loader2 className='h-4 w-4 animate-spin' />
+                              <span className='text-sm text-muted-foreground'>
+                                {useWebSocket ? `Connected via WebSocket ${wsConnected ? '✓' : '✗'}` : 'Processing...'}
+                              </span>
+                            </div>
+                          </MessageContent>
+                        </Message>
+                      )}
+                    </ConversationContent>
                     
-                    {isLoading && (
-                      <Message from="assistant">
-                        <MessageAvatar
-                          src="/bot-avatar.png"
-                          name="AI"
-                        />
-                        <MessageContent>
-                          <Loader2 className='h-4 w-4 animate-spin' />
-                        </MessageContent>
-                      </Message>
-                    )}
-                  </ConversationContent>
-                  
-                  <ConversationScrollButton />
-                </Conversation>
+                    <ConversationScrollButton />
+                  </Conversation>
+                </div>
               )}
               
               {error && (
