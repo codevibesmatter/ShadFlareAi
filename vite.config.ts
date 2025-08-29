@@ -17,7 +17,7 @@ export default defineConfig({
     tailwindcss(),
     cloudflare({
       inspectorPort: false,
-      persistState: false,
+      persistState: true,
     }),
   ],
   resolve: {

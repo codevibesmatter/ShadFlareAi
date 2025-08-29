@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket SQLite Test</title>
+</head>
+<body>
+    <h1>WebSocket + SQLite Test</h1>
+    <div id="messages"></div>
+    <input type="text" id="messageInput" placeholder="Type a message...">
+    <button onclick="sendMessage()">Send</button>
+    <button onclick="connectWebSocket()">Connect</button>
+    
+    <script>
+        let ws = null;
+        let messageDiv = document.getElementById('messages');
+        
+        function log(message) {
+            console.log(message);
+            messageDiv.innerHTML += '<div>' + message + '</div>';
+        }
+        
+        function connectWebSocket() {
+            const wsUrl = 'ws://localhost:5173/ws/ai-chat';
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = function(event) {
+                log('✅ WebSocket connected');
+            };
+            
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                log('📨 Received: ' + JSON.stringify(data));
+            };
+            
+            ws.onclose = function(event) {
+                log('🔌 WebSocket closed: ' + event.code);
+            };
+            
+            ws.onerror = function(error) {
+                log('❌ WebSocket error: ' + error);
+            };
+        }
+        
+        function sendMessage() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('❌ WebSocket not connected');
+                return;
+            }
+            
+            const message = document.getElementById('messageInput').value;
+            if (!message) return;
+            
+            const messageId = crypto.randomUUID();
+            const payload = {
+                type: 'chat',
+                content: message,
+                messageId: messageId,
+                enableFunctionCalling: false
+            };
+            
+            ws.send(JSON.stringify(payload));
+            log('📤 Sent: ' + message);
+            document.getElementById('messageInput').value = '';
+        }
+        
+        // Auto-connect on page load
+        window.addEventListener('load', connectWebSocket);
+        
+        // Send message on Enter key
+        document.getElementById('messageInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>

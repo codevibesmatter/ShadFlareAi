@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 import { streamText } from 'ai'
 import { createWorkersAI } from 'workers-ai-provider'
 import { AIChatWebSocket } from './ai-chat-websocket'
+import { createAuth } from '../../server/auth/config'
 // import { runWithTools } from '@cloudflare/ai-utils'
 
 // Cloudflare Workers type definitions
@@ -68,6 +69,12 @@ export interface Env {
 const app = new Hono<{ Bindings: Env }>()
 
 app.use('*', cors())
+
+// Better Auth routes
+app.all('/api/auth/*', async (c) => {
+  const auth = createAuth(c.env)
+  return auth.handler(c.req.raw)
+})
 
 // Chat API endpoint
 app.post('/api/chat', async (c) => {

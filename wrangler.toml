@@ -42,12 +42,20 @@ new_sqlite_classes = ["AIChatWebSocket"]
 
 [vars]
 BETTER_AUTH_URL = "http://localhost:5173"
+BETTER_AUTH_SECRET = "CPmXy0XgIWaOICeanyyFhR5eFwyQgoSJ0LpGtgJrpHc="
+GOOGLE_CLIENT_ID = ""
+GOOGLE_CLIENT_SECRET = ""
+GITHUB_CLIENT_ID = ""
+GITHUB_CLIENT_SECRET = ""
 GOOGLE_API_KEY = ""
 AI_GATEWAY_URL = ""
 
 [env.production.vars]
 BETTER_AUTH_URL = "https://your-domain.com"
+BETTER_AUTH_SECRET = "CPmXy0XgIWaOICeanyyFhR5eFwyQgoSJ0LpGtgJrpHc="
 GOOGLE_CLIENT_ID = ""
+GOOGLE_CLIENT_SECRET = ""
 GITHUB_CLIENT_ID = ""
+GITHUB_CLIENT_SECRET = ""
 GOOGLE_API_KEY = ""
 AI_GATEWAY_URL = ""

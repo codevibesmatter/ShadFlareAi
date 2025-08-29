@@ -85,3 +85,88 @@
     height: 0;
   }
 }
+
+/* Mermaid diagram styling improvements */
+.mermaid-container img,
+.mermaid-container svg {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Fix Streamdown mermaid spacing issues */
+[data-streamdown] img[alt*="Mermaid"],
+[data-streamdown] img[alt*="mermaid"] {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Remove excessive padding from mermaid containers */
+[data-streamdown] div:has(img[alt*="Mermaid"]),
+[data-streamdown] div:has(img[alt*="mermaid"]) {
+  padding: 0 !important;
+  margin: 1rem 0 !important;
+}
+
+/* Additional specific mermaid fixes */
+img[alt="Mermaid chart"],
+img[alt*="Mermaid chart"] {
+  display: block !important;
+  margin: 1rem auto !important;
+  max-width: 100% !important;
+  height: auto !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
+  /* Remove any excessive top/bottom spacing */
+  object-fit: contain !important;
+  object-position: center !important;
+}
+
+/* Fix containers with mermaid images */
+div:has(> img[alt="Mermaid chart"]),
+div:has(> img[alt*="Mermaid chart"]) {
+  padding: 0 !important;
+  margin: 1rem 0 !important;
+  text-align: center !important;
+}
+
+/* Streamdown specific mermaid diagram container fixes */
+div[role="document"] {
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Remove padding from parent containers */
+div:has(div[role="document"]) {
+  padding: 0.5rem !important;
+  margin: 1rem 0 !important;
+}
+
+/* Target the specific Streamdown mermaid container */
+.group.relative.my-4.h-auto.rounded-lg.border.p-4.language-mermaid {
+  padding: 0.5rem !important;
+  margin: 1rem 0 !important;
+}
+
+/* Target the inner mermaid flex container */
+.my-4.flex.justify-center {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Ensure SVG has no extra margin/padding */
+.group.language-mermaid svg {
+  margin: 0 !important;
+  padding: 0 !important;
+  display: block !important;
+}
+
+/* Reduce MessageContent padding for all messages */
+.flex.flex-col.gap-2.break-words.rounded-lg.px-4.py-3 {
+  padding: 0.5rem !important;
+}

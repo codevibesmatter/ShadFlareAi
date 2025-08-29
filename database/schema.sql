@@ -12,14 +12,19 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Sessions table
+-- Sessions table (enhanced with Cloudflare geolocation data)
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   expires_at DATETIME NOT NULL,
   ip_address TEXT,
   user_agent TEXT,
+  country TEXT,
+  city TEXT,
+  timezone TEXT,
+  cf_ray TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 

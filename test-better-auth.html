@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Better Auth Cloudflare Test</title>
+    <script src="https://unpkg.com/better-auth@1.3.7/client/dist/index.js"></script>
+</head>
+<body>
+    <div id="app">
+        <h1>Better Auth Cloudflare Test</h1>
+        <div id="status">Loading...</div>
+        
+        <div id="auth-controls">
+            <h2>Sign Up</h2>
+            <input type="email" id="signup-email" placeholder="Email" value="test@example.com">
+            <input type="password" id="signup-password" placeholder="Password" value="password123">
+            <button onclick="signUp()">Sign Up</button>
+            
+            <h2>Sign In</h2>
+            <input type="email" id="signin-email" placeholder="Email" value="test@example.com">
+            <input type="password" id="signin-password" placeholder="Password" value="password123">
+            <button onclick="signIn()">Sign In</button>
+            
+            <h2>Session Info</h2>
+            <button onclick="getSession()">Get Session</button>
+            <button onclick="signOut()">Sign Out</button>
+        </div>
+        
+        <div id="results">
+            <h3>Results:</h3>
+            <pre id="result-output"></pre>
+        </div>
+    </div>
+
+    <script>
+        // Test if the auth endpoints are accessible
+        async function testAuth() {
+            try {
+                const response = await fetch('/auth/session', {
+                    method: 'GET',
+                    credentials: 'include'
+                });
+                
+                const status = document.getElementById('status');
+                if (response.ok) {
+                    status.textContent = 'Better Auth endpoints are accessible ✅';
+                    status.style.color = 'green';
+                } else {
+                    status.textContent = `Auth endpoint error: ${response.status} ❌`;
+                    status.style.color = 'red';
+                }
+                
+                const data = await response.text();
+                console.log('Session response:', data);
+            } catch (error) {
+                const status = document.getElementById('status');
+                status.textContent = `Error: ${error.message} ❌`;
+                status.style.color = 'red';
+                console.error('Auth test error:', error);
+            }
+        }
+        
+        async function signUp() {
+            const email = document.getElementById('signup-email').value;
+            const password = document.getElementById('signup-password').value;
+            
+            try {
+                const response = await fetch('/auth/sign-up/email', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        email: email,
+                        password: password,
+                        name: 'Test User'
+                    })
+                });
+                
+                const data = await response.text();
+                document.getElementById('result-output').textContent = `Sign Up Response (${response.status}):\n${data}`;
+                console.log('Sign up response:', data);
+            } catch (error) {
+                document.getElementById('result-output').textContent = `Sign Up Error: ${error.message}`;
+                console.error('Sign up error:', error);
+            }
+        }
+        
+        async function signIn() {
+            const email = document.getElementById('signin-email').value;
+            const password = document.getElementById('signin-password').value;
+            
+            try {
+                const response = await fetch('/auth/sign-in/email', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        email: email,
+                        password: password
+                    })
+                });
+                
+                const data = await response.text();
+                document.getElementById('result-output').textContent = `Sign In Response (${response.status}):\n${data}`;
+                console.log('Sign in response:', data);
+            } catch (error) {
+                document.getElementById('result-output').textContent = `Sign In Error: ${error.message}`;
+                console.error('Sign in error:', error);
+            }
+        }
+        
+        async function getSession() {
+            try {
+                const response = await fetch('/auth/session', {
+                    method: 'GET',
+                    credentials: 'include'
+                });
+                
+                const data = await response.text();
+                document.getElementById('result-output').textContent = `Session Response (${response.status}):\n${data}`;
+                console.log('Session response:', data);
+            } catch (error) {
+                document.getElementById('result-output').textContent = `Session Error: ${error.message}`;
+                console.error('Session error:', error);
+            }
+        }
+        
+        async function signOut() {
+            try {
+                const response = await fetch('/auth/sign-out', {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+                
+                const data = await response.text();
+                document.getElementById('result-output').textContent = `Sign Out Response (${response.status}):\n${data}`;
+                console.log('Sign out response:', data);
+            } catch (error) {
+                document.getElementById('result-output').textContent = `Sign Out Error: ${error.message}`;
+                console.error('Sign out error:', error);
+            }
+        }
+        
+        // Test on page load
+        testAuth();
+    </script>
+</body>
+</html>

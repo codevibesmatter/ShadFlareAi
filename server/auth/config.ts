@@ -1,44 +1,52 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { withCloudflare } from 'better-auth-cloudflare';
+import { anonymous } from 'better-auth/plugins';
 import { drizzle } from 'drizzle-orm/d1';
+import * as schema from '../../database/auth.schema';
 import type { Env } from '../../worker';
 
-export function createAuth(env: Env) {
-  const db = drizzle(env.DB);
+export function createAuth(env: Env, cf?: any) {
+  // Use actual DB with schema for runtime
+  const db = drizzle(env.DB, { schema, logger: true });
   
   return betterAuth({
-    database: drizzleAdapter(db, {
-      provider: 'd1'
-    }),
-    
-    emailAndPassword: {
-      enabled: true
-    },
-    
-    socialProviders: {
-      google: env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET ? {
-        clientId: env.GOOGLE_CLIENT_ID,
-        clientSecret: env.GOOGLE_CLIENT_SECRET
-      } : undefined,
-      github: env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET ? {
-        clientId: env.GITHUB_CLIENT_ID,
-        clientSecret: env.GITHUB_CLIENT_SECRET
-      } : undefined,
-    },
-    
-    secret: env.BETTER_AUTH_SECRET,
-    baseUrl: env.BETTER_AUTH_URL,
-    
-    callbacks: {
-      onSignIn: async ({ user, session }) => {
-        // Log sign-in event
-        console.log(`User ${user.id} signed in at ${new Date().toISOString()}`);
-        return { user, session };
+    ...withCloudflare(
+      {
+        autoDetectIpAddress: true,
+        geolocationTracking: true,
+        cf: cf || {},
+        d1: {
+          db,
+          options: {
+            usePlural: true,
+            debugLogs: true,
+          },
+        },
+        kv: env.SESSIONS,
       },
-      onSignOut: async ({ user }) => {
-        // Log sign-out event
-        console.log(`User ${user.id} signed out at ${new Date().toISOString()}`);
+      {
+        emailAndPassword: {
+          enabled: true,
+        },
+        plugins: [anonymous()],
+        rateLimit: {
+          enabled: true,
+        },
+        secret: env.BETTER_AUTH_SECRET || 'default-dev-secret-change-in-production',
+        baseUrl: env.BETTER_AUTH_URL || 'http://localhost:5173',
+        
+        socialProviders: {
+          google: env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET ? {
+            clientId: env.GOOGLE_CLIENT_ID,
+            clientSecret: env.GOOGLE_CLIENT_SECRET
+          } : undefined,
+          github: env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET ? {
+            clientId: env.GITHUB_CLIENT_ID,
+            clientSecret: env.GITHUB_CLIENT_SECRET
+          } : undefined,
+        },
       }
-    }
+    ),
   });
 }
