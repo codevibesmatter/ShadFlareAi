@@ -26,11 +26,7 @@ export default defineConfig({
     },
   },
   server: {
-    historyApiFallback: {
-      rewrites: [
-        { from: /^\/(?!api).*/, to: '/index.html' }
-      ]
-    }
+    port: 5173,
   },
   build: {
     chunkSizeWarningLimit: 1000,

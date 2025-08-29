@@ -26,7 +26,7 @@ name = "shadcn-admin-dev"
 [env.development.ai]
 binding = "AI"
 
-# Assets and SPA configuration (temporarily disabled for WebSocket testing)
+# Assets and SPA configuration (disabled for development)
 # [assets]
 # binding = "ASSETS"
 # directory = "./dist/client"
