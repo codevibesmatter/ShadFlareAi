@@ -109,11 +109,29 @@ The `@cloudflare/vite-plugin` provides seamless integration between Vite and the
 
 The application uses OpenAPI documentation with interactive testing:
 
-- **API Docs**: `http://localhost:5173/api/ui` - Swagger UI for all endpoints
-- **Auth Docs**: `http://localhost:5173/api/auth/reference` - Better Auth endpoints
-- **OpenAPI Schema**: `http://localhost:5173/api/docs` - JSON specification
+- **API Docs**: `http://localhost:5174/api/ui` - Swagger UI for all endpoints
+- **Auth Docs**: `http://localhost:5174/api/auth/reference` - Better Auth endpoints
+- **OpenAPI Schema**: `http://localhost:5174/api/docs` - JSON specification
 
 New routes defined in `src/server/routes/` with Zod schemas automatically appear in documentation.
+
+## Authentication & Testing
+
+### Test User Credentials
+For development and testing purposes:
+- **Email**: `satnaingdev@gmail.com`
+- **Password**: `password`
+
+### Sign-in Methods
+1. **OAuth (GitHub/Google)**: Currently returns 404 - OAuth providers need configuration
+2. **Email/Password**: Working with test credentials above
+3. **Account Creation**: Better Auth handles user registration automatically on first successful OAuth or can be done via API
+
+### Authentication Flow
+- Better Auth manages sessions with database hooks for real-time WebSocket invalidation
+- Legend State v3 provides reactive auth state management
+- Sessions are stored in Cloudflare KV with automatic expiry
+- WebSocket connections via UserSysDO provide cross-device session invalidation
 
 ## Testing Commands
 No specific test commands are configured. Check with the user if testing setup is needed.

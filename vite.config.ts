@@ -26,7 +26,8 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: 5174,
+    strictPort: false, // Allow Vite to find next available port if 5174 is taken
   },
   build: {
     chunkSizeWarningLimit: 1000,
