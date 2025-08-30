@@ -17,7 +17,7 @@ export class AIChatWebSocket extends DurableObject {
     // Store the environment for later access
     this.env = env
     
-    // Initialize SQLite table for message history
+    // Initialize SQLite tables for message history and artifacts
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS chat_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,6 +25,22 @@ export class AIChatWebSocket extends DurableObject {
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+    
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        message_id TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        language TEXT,
+        metadata TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       )
     `)
     
@@ -168,6 +184,31 @@ export class AIChatWebSocket extends DurableObject {
             model: parsedMessage.model 
           }))
           break
+        
+        case 'get_artifacts':
+          const artifacts = this.loadArtifactsFromDB(currentSession.id, parsedMessage.messageId)
+          ws.send(JSON.stringify({
+            type: 'artifacts_loaded',
+            artifacts,
+            sessionId: currentSession.id
+          }))
+          break
+          
+        case 'update_artifact':
+          this.updateArtifactInDB(parsedMessage.artifactId, parsedMessage.updates)
+          ws.send(JSON.stringify({
+            type: 'artifact_updated',
+            artifactId: parsedMessage.artifactId
+          }))
+          break
+          
+        case 'delete_artifact':
+          this.deleteArtifactFromDB(parsedMessage.artifactId)
+          ws.send(JSON.stringify({
+            type: 'artifact_deleted',
+            artifactId: parsedMessage.artifactId
+          }))
+          break
       }
     } catch (error) {
       ws.send(JSON.stringify({
@@ -204,6 +245,229 @@ export class AIChatWebSocket extends DurableObject {
       role,
       content
     )
+  }
+
+  // Artifact persistence methods
+  private saveArtifactToDB(sessionId: string, messageId: string, artifact: any) {
+    this.ctx.storage.sql.exec(`
+      INSERT INTO artifacts (
+        id, session_id, message_id, title, description, type, 
+        content, language, metadata, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+      artifact.id,
+      sessionId,
+      messageId,
+      artifact.title,
+      artifact.description || null,
+      artifact.type,
+      artifact.content,
+      artifact.language || null,
+      artifact.metadata ? JSON.stringify(artifact.metadata) : null,
+      artifact.createdAt,
+      artifact.updatedAt
+    )
+  }
+
+  private loadArtifactsFromDB(sessionId: string, messageId?: string): any[] {
+    let query = 'SELECT * FROM artifacts WHERE session_id = ?'
+    let params: any[] = [sessionId]
+    
+    if (messageId) {
+      query += ' AND message_id = ?'
+      params.push(messageId)
+    }
+    
+    query += ' ORDER BY created_at ASC'
+    
+    const cursor = this.ctx.storage.sql.exec(query, ...params)
+    return cursor.toArray().map((row: any) => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      type: row.type,
+      content: row.content,
+      language: row.language,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      metadata: row.metadata ? JSON.parse(row.metadata) : undefined
+    }))
+  }
+
+  private updateArtifactInDB(artifactId: string, updates: any) {
+    const setClause = []
+    const params = []
+    
+    if (updates.title) {
+      setClause.push('title = ?')
+      params.push(updates.title)
+    }
+    if (updates.description) {
+      setClause.push('description = ?')
+      params.push(updates.description)
+    }
+    if (updates.content) {
+      setClause.push('content = ?')
+      params.push(updates.content)
+    }
+    if (updates.metadata) {
+      setClause.push('metadata = ?')
+      params.push(JSON.stringify(updates.metadata))
+    }
+    
+    setClause.push('updated_at = ?')
+    params.push(Date.now())
+    params.push(artifactId)
+    
+    this.ctx.storage.sql.exec(
+      `UPDATE artifacts SET ${setClause.join(', ')} WHERE id = ?`,
+      ...params
+    )
+  }
+
+  private deleteArtifactFromDB(artifactId: string) {
+    this.ctx.storage.sql.exec('DELETE FROM artifacts WHERE id = ?', artifactId)
+  }
+
+  // Parse artifacts from content and save to database
+  private async parseAndSaveArtifacts(sessionId: string, messageId: string, content: string) {
+    try {
+      // Use the same parsing logic from the frontend
+      const artifacts = this.parseArtifactsFromContent(content, messageId)
+      
+      // Save each artifact to the database
+      for (const artifact of artifacts) {
+        this.saveArtifactToDB(sessionId, messageId, artifact)
+        console.log(`💾 Saved artifact to DB: ${artifact.title} (${artifact.type})`)
+      }
+      
+      return artifacts
+    } catch (error) {
+      console.error('❌ Error parsing/saving artifacts:', error)
+      return []
+    }
+  }
+
+  // Simplified artifact parsing logic for server-side use
+  private parseArtifactsFromContent(content: string, messageId: string): any[] {
+    const artifacts: any[] = []
+    const codeBlocks = this.extractCodeBlocks(content)
+    
+    codeBlocks.forEach((block, index) => {
+      const artifact = this.createArtifactFromCodeBlock(block, index, messageId)
+      if (artifact) {
+        artifacts.push(artifact)
+      }
+    })
+
+    return artifacts
+  }
+
+  private extractCodeBlocks(content: string) {
+    const blocks: { language: string; content: string; fullMatch: string }[] = []
+    const regex = /```(\w+)?\s*([\s\S]*?)```/g
+    let match
+
+    while ((match = regex.exec(content)) !== null) {
+      const [fullMatch, language = '', codeContent] = match
+      blocks.push({
+        language: language.toLowerCase(),
+        content: codeContent.trim(),
+        fullMatch
+      })
+    }
+
+    return blocks
+  }
+
+  private createArtifactFromCodeBlock(
+    block: { language: string; content: string; fullMatch: string },
+    index: number,
+    messageId: string
+  ): any | null {
+    const { language, content } = block
+    
+    if (!content || content.length < 10) return null
+
+    const languageTypeMap: Record<string, string> = {
+      'javascript': 'javascript',
+      'js': 'javascript', 
+      'typescript': 'typescript',
+      'ts': 'typescript',
+      'tsx': 'react-component',
+      'jsx': 'react-component',
+      'react': 'react-component',
+      'html': 'html',
+      'css': 'css',
+      'json': 'json',
+      'svg': 'svg',
+      'xml': 'svg',
+      'markdown': 'markdown',
+      'md': 'markdown',
+    }
+
+    const type = languageTypeMap[language] || 'code'
+    const title = this.generateArtifactTitle(type, content, index)
+    const description = this.generateArtifactDescription(type, content)
+
+    return {
+      id: `${messageId}-${index}-${Date.now()}`,
+      title,
+      description,
+      type,
+      content,
+      language: language || undefined,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }
+  }
+
+  private generateArtifactTitle(type: string, content: string, index: number): string {
+    switch (type) {
+      case 'react-component': {
+        const componentMatch = content.match(/(?:function|const|class)\s+(\w+)/i)
+        if (componentMatch) return `${componentMatch[1]} Component`
+        return `React Component ${index + 1}`
+      }
+      case 'javascript':
+      case 'typescript': {
+        const functionMatch = content.match(/(?:function|const|let|var)\s+(\w+)/i)
+        if (functionMatch) return `${functionMatch[1]} Function`
+        return `${type.charAt(0).toUpperCase() + type.slice(1)} Code ${index + 1}`
+      }
+      case 'html': {
+        const titleMatch = content.match(/<title>(.*?)<\/title>/i)
+        if (titleMatch) return titleMatch[1]
+        const h1Match = content.match(/<h1[^>]*>(.*?)<\/h1>/i)
+        if (h1Match) return h1Match[1].replace(/<[^>]*>/g, '')
+        return `HTML Document ${index + 1}`
+      }
+      case 'css': {
+        const classMatch = content.match(/\.(\w+)\s*\{/)
+        if (classMatch) return `${classMatch[1]} Styles`
+        return `CSS Styles ${index + 1}`
+      }
+      default:
+        return `Code Snippet ${index + 1}`
+    }
+  }
+
+  private generateArtifactDescription(type: string, content: string): string {
+    const lines = content.split('\n').length
+    
+    switch (type) {
+      case 'react-component':
+        return `React component with ${lines} lines of code`
+      case 'html':
+        return `HTML document with ${lines} lines`
+      case 'css':
+        return `CSS styles with ${lines} lines`
+      case 'javascript':
+      case 'typescript':
+        return `${type} code with ${lines} lines`
+      default:
+        return `Code snippet with ${lines} lines`
+    }
   }
 
   private async handleChatMessage(session: ChatSession, message: any) {
@@ -291,6 +555,9 @@ export class AIChatWebSocket extends DurableObject {
       if (result.trim().length > 0) {
         this.saveMessageToDB(session.id, 'assistant', result)
         session.messages.push({ role: 'assistant', content: result })
+        
+        // Parse and save artifacts if any are created
+        await this.parseAndSaveArtifacts(session.id, message.messageId, result)
       }
       
       // Update WebSocket attachment with minimal session info
@@ -405,6 +672,9 @@ export class AIChatWebSocket extends DurableObject {
       if (fullContent.trim().length > 0) {
         this.saveMessageToDB(session.id, 'assistant', fullContent)
         session.messages.push({ role: 'assistant', content: fullContent })
+        
+        // Parse and save artifacts if any are created
+        await this.parseAndSaveArtifacts(session.id, message.messageId, fullContent)
       }
       
       // Update WebSocket attachment with minimal session info
@@ -560,6 +830,9 @@ export class AIChatWebSocket extends DurableObject {
         if (fullContent.trim().length > 0) {
           this.saveMessageToDB(session.id, 'assistant', fullContent)
           session.messages.push({ role: 'assistant', content: fullContent })
+          
+          // Parse and save artifacts if any are created
+          await this.parseAndSaveArtifacts(session.id, message.messageId, fullContent)
         }
         
         // Update WebSocket attachment with minimal session info (no messages)
@@ -586,6 +859,9 @@ export class AIChatWebSocket extends DurableObject {
         if (content.trim().length > 0) {
           this.saveMessageToDB(session.id, 'assistant', content)
           session.messages.push({ role: 'assistant', content: content })
+          
+          // Parse and save artifacts if any are created
+          await this.parseAndSaveArtifacts(session.id, message.messageId, content)
         }
         
         // Update WebSocket attachment with minimal session info

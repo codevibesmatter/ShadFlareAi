@@ -1,4 +1,6 @@
 import { StrictMode } from 'react'
+// Initialize Legend State v3 persistence early
+import './stores/config'
 import ReactDOM from 'react-dom/client'
 import { AxiosError } from 'axios'
 import {
@@ -8,7 +10,7 @@ import {
 } from '@tanstack/react-query'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { toast } from 'sonner'
-import { useAuthStore } from '@/stores/auth-store'
+import { authActions, initializeAuth } from '@/stores'
 import { handleServerError } from '@/lib/handle-server-error'
 import { DirectionProvider } from './context/direction-provider'
 import { FontProvider } from './context/font-provider'
@@ -53,7 +55,7 @@ const queryClient = new QueryClient({
       if (error instanceof AxiosError) {
         if (error.response?.status === 401) {
           toast.error('Session expired!')
-          useAuthStore.getState().auth.reset()
+          authActions.reset()
           const redirect = `${router.history.location.href}`
           router.navigate({ to: '/sign-in', search: { redirect } })
         }
@@ -101,4 +103,9 @@ if (!rootElement.innerHTML) {
       </QueryClientProvider>
     </StrictMode>
   )
+  
+  // Initialize auth after app renders to avoid blocking
+  setTimeout(() => {
+    initializeAuth()
+  }, 100)
 }
