@@ -13,6 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { useState, useRef, useEffect } from 'react'
+import { useWebSocket } from '@/hooks/use-websocket'
+import type { WebSocketMessage } from '@/lib/websocket-manager'
 import { Streamdown } from 'streamdown'
 import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/conversation'
 import { Message, MessageContent, MessageAvatar } from '@/components/message'
@@ -36,9 +38,7 @@ function AIChatPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [enableFunctionCalling, setEnableFunctionCalling] = useState(false)
-  const [useWebSocket, setUseWebSocket] = useState(true)
-  const [wsConnected, setWsConnected] = useState(false)
-  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [useWebSocketEnabled, setUseWebSocketEnabled] = useState(true)
   const [enableArtifacts, setEnableArtifacts] = useState(true)
   
   // Voice AI integration
@@ -52,9 +52,24 @@ function AIChatPage() {
   
   const abortControllerRef = useRef<AbortController | null>(null)
   const conversationRef = useRef<HTMLDivElement | null>(null)
-  const wsRef = useRef<WebSocket | null>(null)
   const { artifacts, createArtifact } = useArtifacts()
   const lastUserMessageRef = useRef<string>('')
+  
+  // WebSocket management
+  const { 
+    isConnected: wsConnected, 
+    sessionId, 
+    sendChatMessage, 
+    setEnabled: setWebSocketEnabled 
+  } = useWebSocket({
+    enabled: useWebSocketEnabled,
+    model: selectedModel,
+    onMessage: handleWebSocketMessage,
+    onError: (error) => {
+      console.error('WebSocket error:', error)
+      setError(error.message || 'WebSocket connection error')
+    }
+  })
   
   // Voice AI refs
   const mediaStreamRef = useRef<MediaStream | null>(null)
@@ -226,6 +241,95 @@ function AIChatPage() {
     }
   }
 
+  // WebSocket message handler
+  function handleWebSocketMessage(data: WebSocketMessage) {
+    console.log('📨 WebSocket message received:', data)
+    
+    switch (data.type) {
+      case 'connection':
+        console.log('🔗 Connection established, session ID:', data.sessionId)
+        break
+        
+      case 'stream_start':
+        console.log('🚀 Stream started for message:', data.messageId)
+        setMessages(prev => [...prev, {
+          id: data.messageId!,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          artifacts: []
+        }])
+        break
+
+      case 'stream_chunk':
+        console.log('📝 Stream chunk received:', data.content)
+        setMessages(prev => prev.map(msg =>
+          msg.id === data.messageId
+            ? { ...msg, content: msg.content + data.content }
+            : msg
+        ))
+
+        if (data.done) {
+          console.log('✅ Stream completed')
+          setIsLoading(false)
+          
+          // Parse artifacts from completed message if artifacts are enabled
+          if (enableArtifacts) {
+            setMessages(prevMessages => {
+              const assistantMessage = prevMessages.find(msg => msg.id === data.messageId)
+              if (assistantMessage && shouldCreateArtifact(lastUserMessageRef.current, assistantMessage.content)) {
+                const artifacts = parseArtifactsFromContent(assistantMessage.content, data.messageId!)
+                if (artifacts.length > 0) {
+                  return prevMessages.map(msg =>
+                    msg.id === data.messageId
+                      ? { ...msg, artifacts: artifacts }
+                      : msg
+                  )
+                }
+              }
+              return prevMessages
+            })
+          }
+        }
+        break
+
+      case 'function_calling_complete':
+        console.log('🔧 Function calling completed:', data.content)
+        const functionMessage: ArtifactMessage = {
+          id: data.messageId!,
+          role: 'assistant',
+          content: data.content!,
+          timestamp: Date.now(),
+          artifacts: []
+        }
+        
+        // Parse artifacts from function calling result if artifacts are enabled
+        if (enableArtifacts && shouldCreateArtifact(lastUserMessageRef.current, data.content!)) {
+          const artifacts = parseArtifactsFromContent(data.content!, data.messageId!)
+          functionMessage.artifacts = artifacts
+        }
+        
+        setMessages(prev => [...prev, functionMessage])
+        setIsLoading(false)
+        break
+
+      case 'error':
+      case 'stream_error':
+      case 'function_calling_error':
+        console.error('❌ WebSocket error:', data.message || data.error)
+        setError(data.message || data.error)
+        setIsLoading(false)
+        break
+
+      case 'pong':
+        console.log('🏓 Pong received')
+        break
+
+      default:
+        console.log('❓ Unknown message type:', data.type)
+    }
+  }
+
   const getContextualSuggestions = () => {
     if (messages.length === 0) {
       return [
@@ -267,180 +371,9 @@ function AIChatPage() {
     ]
   }
 
-  // Direct WebSocket connection management
-  const connectWebSocket = () => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      console.log('WebSocket already connected')
-      return
-    }
-
-    // Close any existing connection first
-    if (wsRef.current) {
-      wsRef.current.close()
-      wsRef.current = null
-    }
-
-    console.log('🔄 Connecting to WebSocket...')
-    setError(null)
-    setIsLoading(true)
-
-    try {
-      // Create WebSocket URL
-      const wsUrl = new URL('/ws/ai-chat', window.location.origin)
-      wsUrl.protocol = wsUrl.protocol === 'https:' ? 'wss:' : 'ws:'
-      wsUrl.searchParams.set('model', selectedModel)
-
-      console.log('📡 WebSocket URL:', wsUrl.toString())
-      
-      const ws = new WebSocket(wsUrl.toString())
-      wsRef.current = ws
-
-      ws.onopen = () => {
-        console.log('✅ WebSocket connected successfully!')
-        setWsConnected(true)
-        setIsLoading(false)
-        setError(null)
-      }
-
-      ws.onmessage = (event) => {
-        console.log('📨 WebSocket message received:', event.data)
-        
-        try {
-          const data = JSON.parse(event.data)
-          console.log('📨 Parsed message:', data)
-          
-          switch (data.type) {
-            case 'connection':
-              console.log('🔗 Connection established, session ID:', data.sessionId)
-              setSessionId(data.sessionId)
-              break
-              
-            case 'stream_start':
-              console.log('🚀 Stream started for message:', data.messageId)
-              setMessages(prev => [...prev, {
-                id: data.messageId,
-                role: 'assistant',
-                content: '',
-                timestamp: Date.now(),
-                artifacts: []
-              }])
-              break
-
-            case 'stream_chunk':
-              console.log('📝 Stream chunk received:', data.content)
-              setMessages(prev => prev.map(msg =>
-                msg.id === data.messageId
-                  ? { ...msg, content: msg.content + data.content }
-                  : msg
-              ))
-
-              if (data.done) {
-                console.log('✅ Stream completed')
-                setIsLoading(false)
-                
-                // Parse artifacts from completed message if artifacts are enabled
-                if (enableArtifacts) {
-                  setMessages(prevMessages => {
-                    const assistantMessage = prevMessages.find(msg => msg.id === data.messageId)
-                    if (assistantMessage && shouldCreateArtifact(lastUserMessageRef.current, assistantMessage.content)) {
-                      const artifacts = parseArtifactsFromContent(assistantMessage.content, data.messageId)
-                      if (artifacts.length > 0) {
-                        return prevMessages.map(msg =>
-                          msg.id === data.messageId
-                            ? { ...msg, artifacts: artifacts }
-                            : msg
-                        )
-                      }
-                    }
-                    return prevMessages
-                  })
-                }
-              }
-              break
-
-            case 'function_calling_complete':
-              console.log('🔧 Function calling completed:', data.content)
-              const functionMessage: ArtifactMessage = {
-                id: data.messageId,
-                role: 'assistant',
-                content: data.content,
-                timestamp: Date.now(),
-                artifacts: []
-              }
-              
-              // Parse artifacts from function calling result if artifacts are enabled
-              if (enableArtifacts && shouldCreateArtifact(lastUserMessageRef.current, data.content)) {
-                const artifacts = parseArtifactsFromContent(data.content, data.messageId)
-                functionMessage.artifacts = artifacts
-              }
-              
-              setMessages(prev => [...prev, functionMessage])
-              setIsLoading(false)
-              break
-
-            case 'error':
-            case 'stream_error':
-            case 'function_calling_error':
-              console.error('❌ WebSocket error:', data.message || data.error)
-              setError(data.message || data.error)
-              setIsLoading(false)
-              break
-
-            case 'pong':
-              console.log('🏓 Pong received')
-              break
-
-            default:
-              console.log('❓ Unknown message type:', data.type)
-          }
-        } catch (err) {
-          console.error('❌ Failed to parse WebSocket message:', err, event.data)
-        }
-      }
-
-      ws.onclose = (event) => {
-        console.log('🔌 WebSocket closed:', event.code, event.reason)
-        setWsConnected(false)
-        setIsLoading(false)
-        
-        // Only auto-reconnect if WebSocket is still enabled and it wasn't a clean close or going away
-        if (useWebSocket && event.code !== 1000 && event.code !== 1001) {
-          console.log('🔄 Scheduling reconnection in 3 seconds...')
-          setTimeout(() => {
-            if (useWebSocket && !wsRef.current) { // Only reconnect if still enabled and no active connection
-              console.log('🔄 Attempting to reconnect...')
-              connectWebSocket()
-            }
-          }, 3000)
-        }
-      }
-
-      ws.onerror = (event) => {
-        console.error('❌ WebSocket error:', event)
-        setWsConnected(false)
-        setIsLoading(false)
-        setError('WebSocket connection error')
-      }
-
-    } catch (err) {
-      console.error('❌ Failed to create WebSocket connection:', err)
-      setIsLoading(false)
-      setError('Failed to establish WebSocket connection')
-    }
-  }
-
-  const disconnectWebSocket = () => {
-    console.log('🔌 Disconnecting WebSocket...')
-    if (wsRef.current) {
-      wsRef.current.close()
-      wsRef.current = null
-    }
-    setWsConnected(false)
-    setSessionId(null)
-  }
-
+  // WebSocket message sending helper
   const sendWebSocketMessage = (content: string) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+    if (!wsConnected) {
       console.error('❌ WebSocket not connected')
       setError('WebSocket not connected. Please try again.')
       return
@@ -465,43 +398,21 @@ function AIChatPage() {
     setIsLoading(true)
     setError(null)
 
-    // Send to WebSocket
-    const wsMessage = {
-      type: 'chat',
-      content,
-      messageId,
-      enableFunctionCalling
-    }
+    // Send via WebSocket manager
+    const success = sendChatMessage(content, { enableFunctionCalling })
     
-    console.log('📤 WebSocket message payload:', wsMessage)
-    wsRef.current.send(JSON.stringify(wsMessage))
+    if (!success) {
+      setError('Failed to send message. Please try again.')
+      setIsLoading(false)
+      // Remove the user message if send failed
+      setMessages(prev => prev.filter(m => m.id !== userMessage.id))
+    }
   }
 
-  // Connect WebSocket when useWebSocket is enabled
+  // Update WebSocket enabled state
   useEffect(() => {
-    if (useWebSocket) {
-      connectWebSocket()
-    } else {
-      disconnectWebSocket()
-    }
-
-    // Cleanup on unmount
-    return () => {
-      disconnectWebSocket()
-    }
-  }, [useWebSocket])
-
-  // Reconnect WebSocket when model changes (only if already connected)
-  useEffect(() => {
-    if (useWebSocket && wsConnected) {
-      console.log('🔄 Model changed, reconnecting WebSocket...')
-      disconnectWebSocket()
-      // Small delay to ensure clean disconnection before reconnecting
-      setTimeout(() => {
-        connectWebSocket()
-      }, 100)
-    }
-  }, [selectedModel])
+    setWebSocketEnabled(useWebSocketEnabled)
+  }, [useWebSocketEnabled, setWebSocketEnabled])
 
   // Auto-scroll effect when messages change
   useEffect(() => {
@@ -550,7 +461,7 @@ function AIChatPage() {
     if (!input.trim() || isLoading) return
 
     // Use WebSocket or HTTP based on toggle
-    if (useWebSocket) {
+    if (useWebSocketEnabled) {
       if (!wsConnected) {
         setError('WebSocket not connected. Please try again.')
         return
@@ -708,7 +619,7 @@ function AIChatPage() {
       if (userMessage.role === 'user') {
         // Remove the assistant message and regenerate
         setMessages(prev => prev.filter(m => m.id !== messageId))
-        if (useWebSocket) {
+        if (useWebSocketEnabled) {
           sendWebSocketMessage(userMessage.content)
         } else {
           // Trigger HTTP regeneration
@@ -742,8 +653,8 @@ function AIChatPage() {
               <div className='flex items-center gap-2'>
                 <Switch 
                   id='websocket-mode'
-                  checked={useWebSocket}
-                  onCheckedChange={setUseWebSocket}
+                  checked={useWebSocketEnabled}
+                  onCheckedChange={setUseWebSocketEnabled}
                 />
                 <Label htmlFor='websocket-mode' className='flex items-center gap-1 text-sm'>
                   WebSocket
@@ -915,7 +826,7 @@ function AIChatPage() {
                             <div className='flex items-center gap-2'>
                               <Loader2 className='h-4 w-4 animate-spin' />
                               <span className='text-sm text-muted-foreground'>
-                                {useWebSocket ? `Connected via WebSocket ${wsConnected ? '✓' : '✗'}` : 'Processing...'}
+                                {useWebSocketEnabled ? `Connected via WebSocket ${wsConnected ? '✓' : '✗'}` : 'Processing...'}
                               </span>
                             </div>
                           </MessageContent>
