@@ -36,13 +36,13 @@ interface AuthStore {
   rememberMe: boolean
 }
 
-// Initialize auth state - start with no loading state to prevent blocking
+// Initialize auth state - start with loading to prevent premature redirects
 const initializeAuthState = (): AuthStore => {
   return {
     user: null,
     session: null,
     isAuthenticated: false,
-    isLoading: false, // Don't block initial render
+    isLoading: true, // Start loading to wait for session check
     error: null,
     loginRedirectPath: null,
     rememberMe: false
