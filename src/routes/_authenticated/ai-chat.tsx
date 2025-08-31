@@ -8,7 +8,7 @@ import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Send, Loader2, Bot, Wrench } from 'lucide-react'
+import { Send, Loader2, Bot, Wrench, Sparkles, Mic, MicOff, Volume2 } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
@@ -16,18 +16,22 @@ import { useState, useRef, useEffect } from 'react'
 import { Streamdown } from 'streamdown'
 import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/conversation'
 import { Message, MessageContent, MessageAvatar } from '@/components/message'
+import { ArtifactMessageComponent } from '@/components/artifacts/artifact-message'
+import { useArtifacts } from '@/hooks/use-artifacts'
+import { parseArtifactsFromContent, shouldCreateArtifact } from '@/utils/artifact-parser'
+import type { ArtifactMessage } from '@/types/artifacts'
+import { Actions, Action } from '@/components/actions'
+import { Suggestions, Suggestion } from '@/components/suggestion'
+import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/reasoning'
+import { CodeBlock, CodeBlockCopyButton } from '@/components/code-block'
+import { Copy, ThumbsUp, ThumbsDown, RefreshCw, Share, BookmarkPlus } from 'lucide-react'
 
-interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  timestamp?: number
-}
+// Use ArtifactMessage type for enhanced message handling
 
 function AIChatPage() {
   // Using AI Elements components for better chat experience
   const [selectedModel, setSelectedModel] = useState('llama-3-8b')
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<ArtifactMessage[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -35,15 +39,245 @@ function AIChatPage() {
   const [useWebSocket, setUseWebSocket] = useState(true)
   const [wsConnected, setWsConnected] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [enableArtifacts, setEnableArtifacts] = useState(true)
+  
+  // Voice AI integration
+  const [isVoiceMode, setIsVoiceMode] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const [isProcessingVoice, setIsProcessingVoice] = useState(false)
+  const [selectedVoice, setSelectedVoice] = useState('@cf/deepgram/aura-1')
+  const [selectedVoiceModel, setSelectedVoiceModel] = useState('@cf/deepgram/nova-3')
+  const [liveTranscription, setLiveTranscription] = useState('')
+  const [transcriptionHistory, setTranscriptionHistory] = useState<string[]>([])
+  
   const abortControllerRef = useRef<AbortController | null>(null)
   const conversationRef = useRef<HTMLDivElement | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const { artifacts, createArtifact } = useArtifacts()
+  const lastUserMessageRef = useRef<string>('')
+  
+  // Voice AI refs
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const voiceWsRef = useRef<WebSocket | null>(null)
+
+  // Voice AI functions
+  const startVoiceRecording = async () => {
+    try {
+      console.log('🎤 Starting voice recording...')
+      setIsRecording(true)
+      setIsProcessingVoice(false)
+      
+      // Clear previous transcriptions
+      setLiveTranscription('')
+      setTranscriptionHistory([])
+      setInput('')
+      
+      // Get microphone access with proper audio constraints
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      })
+      mediaStreamRef.current = stream
+      
+      // Connect to voice WebSocket
+      const voiceWs = new WebSocket(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/voice-ai?voice=${encodeURIComponent(selectedVoice)}&model=${encodeURIComponent(selectedVoiceModel)}`)
+      voiceWsRef.current = voiceWs
+      
+      voiceWs.onopen = async () => {
+        console.log('🔗 Voice WebSocket connected')
+        
+        // Start audio processing
+        const audioContext = new AudioContext({ sampleRate: 16000 })
+        const source = audioContext.createMediaStreamSource(stream)
+        
+        // Create and connect ScriptProcessorNode for audio processing
+        const processor = audioContext.createScriptProcessor(4096, 1, 1)
+        
+        processor.onaudioprocess = (event) => {
+          if (!isRecording || voiceWs.readyState !== WebSocket.OPEN) return
+          
+          const inputBuffer = event.inputBuffer
+          const inputData = inputBuffer.getChannelData(0)
+          
+          // Convert Float32Array to 16-bit PCM
+          const samples = new Int16Array(inputData.length)
+          for (let i = 0; i < inputData.length; i++) {
+            samples[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768))
+          }
+          
+          // Convert to base64 for transmission
+          const buffer = new ArrayBuffer(samples.length * 2)
+          const view = new DataView(buffer)
+          for (let i = 0; i < samples.length; i++) {
+            view.setInt16(i * 2, samples[i], true)
+          }
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)))
+          
+          // Send audio chunk
+          voiceWs.send(JSON.stringify({
+            type: 'audio_chunk',
+            data: base64,
+            timestamp: Date.now()
+          }))
+        }
+        
+        source.connect(processor)
+        processor.connect(audioContext.destination)
+        
+        // Send start recording message
+        voiceWs.send(JSON.stringify({ type: 'start_recording' }))
+      }
+      
+      voiceWs.onmessage = (event) => {
+        const data = JSON.parse(event.data)
+        console.log('📰 Voice message received:', data.type)
+        
+        if (data.type === 'live_transcription' && data.text) {
+          console.log('📝 Live transcription:', data.text)
+          
+          // Update live transcription display
+          setLiveTranscription(prev => {
+            // If the transcription is new, add it to history
+            if (data.text && !transcriptionHistory.includes(data.text)) {
+              setTranscriptionHistory(prev => [...prev, data.text])
+            }
+            return data.text
+          })
+          
+          // Auto-populate input field with accumulated transcription
+          const fullTranscription = transcriptionHistory.join(' ') + ' ' + data.text
+          setInput(fullTranscription.trim())
+        } else if (data.type === 'transcription' && data.text) {
+          // Handle old format for compatibility
+          console.log('📋 Final transcription:', data.text)
+          setInput(data.text)
+          stopVoiceRecording()
+        }
+      }
+      
+      voiceWs.onerror = (error) => {
+        console.error('Voice WebSocket error:', error)
+        stopVoiceRecording()
+      }
+      
+    } catch (error) {
+      console.error('Error starting voice recording:', error)
+      setIsRecording(false)
+    }
+  }
+
+  const stopVoiceRecording = () => {
+    console.log('🛑 Stopping voice recording...')
+    setIsRecording(false)
+    setIsProcessingVoice(true)
+    
+    // Send stop recording message
+    if (voiceWsRef.current && voiceWsRef.current.readyState === WebSocket.OPEN) {
+      voiceWsRef.current.send(JSON.stringify({ type: 'stop_recording' }))
+    }
+    
+    // Stop microphone after a brief delay to allow final audio chunks
+    setTimeout(() => {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop())
+        mediaStreamRef.current = null
+      }
+      
+      // Close voice WebSocket
+      if (voiceWsRef.current) {
+        voiceWsRef.current.close()
+        voiceWsRef.current = null
+      }
+      
+      setIsProcessingVoice(false)
+    }, 500)
+  }
+  
+  const playAudioResponse = async (base64Audio: string) => {
+    try {
+      // Decode base64 audio
+      const audioData = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0))
+      
+      // Create audio context and decode
+      const audioContext = new AudioContext()
+      const audioBuffer = await audioContext.decodeAudioData(audioData.buffer)
+      
+      // Play the audio
+      const source = audioContext.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(audioContext.destination)
+      source.start()
+      
+      console.log('✅ AI audio response played successfully')
+    } catch (error) {
+      console.error('❌ Error playing audio response:', error)
+    }
+  }
+
+  const toggleVoiceMode = () => {
+    setIsVoiceMode(!isVoiceMode)
+    if (isRecording) {
+      stopVoiceRecording()
+    }
+  }
+
+  const getContextualSuggestions = () => {
+    if (messages.length === 0) {
+      return [
+        'Create a simple React component',
+        'Write a Python function',
+        'Help me debug this code',
+        'Explain this concept',
+        'Generate a HTML page'
+      ]
+    }
+    
+    const lastMessage = messages[messages.length - 1]
+    if (lastMessage?.role === 'assistant') {
+      if (lastMessage.artifacts && lastMessage.artifacts.length > 0) {
+        return [
+          'Modify the component',
+          'Add more features',
+          'Explain how this works',
+          'Create a similar component',
+          'Add styling'
+        ]
+      } else {
+        return [
+          'Can you show me code examples?',
+          'Create an artifact for this',
+          'Make this interactive',
+          'Add more details',
+          'What are the alternatives?'
+        ]
+      }
+    }
+    
+    return [
+      'Continue this conversation',
+      'Ask a follow-up question',
+      'Create something new',
+      'Explain further',
+      'Show me examples'
+    ]
+  }
 
   // Direct WebSocket connection management
   const connectWebSocket = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       console.log('WebSocket already connected')
       return
+    }
+
+    // Close any existing connection first
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
     }
 
     console.log('🔄 Connecting to WebSocket...')
@@ -87,7 +321,8 @@ function AIChatPage() {
                 id: data.messageId,
                 role: 'assistant',
                 content: '',
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                artifacts: []
               }])
               break
 
@@ -102,17 +337,44 @@ function AIChatPage() {
               if (data.done) {
                 console.log('✅ Stream completed')
                 setIsLoading(false)
+                
+                // Parse artifacts from completed message if artifacts are enabled
+                if (enableArtifacts) {
+                  setMessages(prevMessages => {
+                    const assistantMessage = prevMessages.find(msg => msg.id === data.messageId)
+                    if (assistantMessage && shouldCreateArtifact(lastUserMessageRef.current, assistantMessage.content)) {
+                      const artifacts = parseArtifactsFromContent(assistantMessage.content, data.messageId)
+                      if (artifacts.length > 0) {
+                        return prevMessages.map(msg =>
+                          msg.id === data.messageId
+                            ? { ...msg, artifacts: artifacts }
+                            : msg
+                        )
+                      }
+                    }
+                    return prevMessages
+                  })
+                }
               }
               break
 
             case 'function_calling_complete':
               console.log('🔧 Function calling completed:', data.content)
-              setMessages(prev => [...prev, {
+              const functionMessage: ArtifactMessage = {
                 id: data.messageId,
                 role: 'assistant',
                 content: data.content,
-                timestamp: Date.now()
-              }])
+                timestamp: Date.now(),
+                artifacts: []
+              }
+              
+              // Parse artifacts from function calling result if artifacts are enabled
+              if (enableArtifacts && shouldCreateArtifact(lastUserMessageRef.current, data.content)) {
+                const artifacts = parseArtifactsFromContent(data.content, data.messageId)
+                functionMessage.artifacts = artifacts
+              }
+              
+              setMessages(prev => [...prev, functionMessage])
               setIsLoading(false)
               break
 
@@ -141,11 +403,14 @@ function AIChatPage() {
         setWsConnected(false)
         setIsLoading(false)
         
-        // Auto-reconnect after 3 seconds if not a clean close
-        if (event.code !== 1000) {
+        // Only auto-reconnect if WebSocket is still enabled and it wasn't a clean close or going away
+        if (useWebSocket && event.code !== 1000 && event.code !== 1001) {
+          console.log('🔄 Scheduling reconnection in 3 seconds...')
           setTimeout(() => {
-            console.log('🔄 Attempting to reconnect...')
-            connectWebSocket()
+            if (useWebSocket && !wsRef.current) { // Only reconnect if still enabled and no active connection
+              console.log('🔄 Attempting to reconnect...')
+              connectWebSocket()
+            }
           }, 3000)
         }
       }
@@ -184,12 +449,16 @@ function AIChatPage() {
     const messageId = crypto.randomUUID()
     console.log('📤 Sending message via WebSocket:', content, 'ID:', messageId)
     
+    // Store user message for artifact parsing
+    lastUserMessageRef.current = content
+    
     // Add user message immediately
-    const userMessage: ChatMessage = {
+    const userMessage: ArtifactMessage = {
       id: `user_${messageId}`,
       role: 'user',
       content,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      artifacts: []
     }
 
     setMessages(prev => [...prev, userMessage])
@@ -220,7 +489,19 @@ function AIChatPage() {
     return () => {
       disconnectWebSocket()
     }
-  }, [useWebSocket, selectedModel])
+  }, [useWebSocket])
+
+  // Reconnect WebSocket when model changes (only if already connected)
+  useEffect(() => {
+    if (useWebSocket && wsConnected) {
+      console.log('🔄 Model changed, reconnecting WebSocket...')
+      disconnectWebSocket()
+      // Small delay to ensure clean disconnection before reconnecting
+      setTimeout(() => {
+        connectWebSocket()
+      }, 100)
+    }
+  }, [selectedModel])
 
   // Auto-scroll effect when messages change
   useEffect(() => {
@@ -279,10 +560,14 @@ function AIChatPage() {
       return
     }
 
-    const userMessage: ChatMessage = {
+    // Store user message for artifact parsing
+    lastUserMessageRef.current = input.trim()
+    
+    const userMessage: ArtifactMessage = {
       id: Date.now().toString(),
       role: 'user',
-      content: input.trim()
+      content: input.trim(),
+      artifacts: []
     }
 
     setMessages(prev => [...prev, userMessage])
@@ -313,10 +598,11 @@ function AIChatPage() {
       }
 
       // Create assistant message
-      const assistantMessage: ChatMessage = {
+      const assistantMessage: ArtifactMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: ''
+        content: '',
+        artifacts: []
       }
 
       setMessages(prev => [...prev, assistantMessage])
@@ -324,10 +610,17 @@ function AIChatPage() {
       if (shouldUseFunctionCalling) {
         // Handle function calling response (non-streaming)
         const data: any = await response.json()
+        
+        // Parse artifacts from function calling result if artifacts are enabled
+        let artifacts: any[] = []
+        if (enableArtifacts && shouldCreateArtifact(lastUserMessageRef.current, data.content)) {
+          artifacts = parseArtifactsFromContent(data.content, assistantMessage.id)
+        }
+        
         setMessages(prev => 
           prev.map(m => 
             m.id === assistantMessage.id 
-              ? { ...m, content: data.content }
+              ? { ...m, content: data.content, artifacts }
               : m
           )
         )
@@ -336,6 +629,7 @@ function AIChatPage() {
         const reader = response.body?.getReader()
         if (!reader) throw new Error('No response body')
 
+        let fullContent = ''
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
@@ -349,6 +643,7 @@ function AIChatPage() {
                 const data = JSON.parse(line.slice(6))
                 const content = data.choices?.[0]?.delta?.content
                 if (content) {
+                  fullContent += content
                   setMessages(prev => 
                     prev.map(m => 
                       m.id === assistantMessage.id 
@@ -361,6 +656,20 @@ function AIChatPage() {
                 // Ignore parsing errors for individual chunks
               }
             }
+          }
+        }
+        
+        // Parse artifacts from completed message if artifacts are enabled
+        if (enableArtifacts && shouldCreateArtifact(lastUserMessageRef.current, fullContent)) {
+          const artifacts = parseArtifactsFromContent(fullContent, assistantMessage.id)
+          if (artifacts.length > 0) {
+            setMessages(prev => 
+              prev.map(m => 
+                m.id === assistantMessage.id 
+                  ? { ...m, artifacts }
+                  : m
+              )
+            )
           }
         }
       }
@@ -380,6 +689,33 @@ function AIChatPage() {
   const stop = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
+    }
+  }
+
+  const handleSuggestionClick = (suggestion: string) => {
+    setInput(suggestion)
+  }
+
+  const handleCopyMessage = (content: string) => {
+    navigator.clipboard.writeText(content)
+  }
+
+  const handleRegenerateResponse = (messageId: string) => {
+    // Find the user message before this assistant message
+    const messageIndex = messages.findIndex(m => m.id === messageId)
+    if (messageIndex > 0) {
+      const userMessage = messages[messageIndex - 1]
+      if (userMessage.role === 'user') {
+        // Remove the assistant message and regenerate
+        setMessages(prev => prev.filter(m => m.id !== messageId))
+        if (useWebSocket) {
+          sendWebSocketMessage(userMessage.content)
+        } else {
+          // Trigger HTTP regeneration
+          lastUserMessageRef.current = userMessage.content
+          handleSubmit({ preventDefault: () => {} } as React.FormEvent)
+        }
+      }
     }
   }
 
@@ -427,6 +763,17 @@ function AIChatPage() {
                   Tools
                 </Label>
               </div>
+              <div className='flex items-center gap-2'>
+                <Switch 
+                  id='artifacts'
+                  checked={enableArtifacts}
+                  onCheckedChange={setEnableArtifacts}
+                />
+                <Label htmlFor='artifacts' className='flex items-center gap-1 text-sm'>
+                  <Sparkles className='h-3 w-3' />
+                  Artifacts
+                </Label>
+              </div>
               <Select value={selectedModel} onValueChange={setSelectedModel}>
                 <SelectTrigger className='w-48'>
                   <SelectValue />
@@ -452,34 +799,111 @@ function AIChatPage() {
                     <p className='mt-4 text-muted-foreground'>
                       Start a conversation with the AI assistant
                     </p>
-                    {enableFunctionCalling && (selectedModel === 'hermes-2-pro' || selectedModel === 'gemini-2.5-flash-lite') && (
-                      <div className='mt-4 p-3 bg-blue-50 dark:bg-blue-950 rounded-lg'>
-                        <div className='flex items-center gap-2 text-blue-700 dark:text-blue-300 mb-2'>
-                          <Wrench className='h-4 w-4' />
-                          <span className='font-medium'>Function Calling Enabled</span>
+                    <div className='space-y-4'>
+                      {enableFunctionCalling && (selectedModel === 'hermes-2-pro' || selectedModel === 'gemini-2.5-flash-lite') && (
+                        <div className='p-3 bg-blue-50 dark:bg-blue-950 rounded-lg'>
+                          <div className='flex items-center gap-2 text-blue-700 dark:text-blue-300 mb-2'>
+                            <Wrench className='h-4 w-4' />
+                            <span className='font-medium'>Function Calling Enabled</span>
+                          </div>
+                          <p className='text-sm text-blue-600 dark:text-blue-400'>
+                            The AI can now use tools like calculator, current time, random numbers, task creation, and API testing.
+                          </p>
                         </div>
-                        <p className='text-sm text-blue-600 dark:text-blue-400'>
-                          The AI can now use tools like calculator, current time, random numbers, task creation, and API testing.
-                        </p>
-                      </div>
-                    )}
+                      )}
+                      
+                      {enableArtifacts && (
+                        <div className='p-3 bg-purple-50 dark:bg-purple-950 rounded-lg'>
+                          <div className='flex items-center gap-2 text-purple-700 dark:text-purple-300 mb-2'>
+                            <Sparkles className='h-4 w-4' />
+                            <span className='font-medium'>Artifacts Enabled</span>
+                          </div>
+                          <p className='text-sm text-purple-600 dark:text-purple-400'>
+                            The AI can create interactive artifacts like code components, HTML pages, and visualizations.
+                          </p>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               ) : (
                 <div ref={conversationRef} className='h-full'>
                   <Conversation className='h-full'>
                     <ConversationContent>
-                      {messages.map((message) => (
-                        <Message key={message.id} from={message.role}>
-                          <MessageAvatar
-                            src={message.role === 'user' ? '/user-avatar.png' : '/bot-avatar.png'}
-                            name={message.role === 'user' ? 'You' : 'AI'}
-                          />
-                          <MessageContent>
-                            <Streamdown>{message.content}</Streamdown>
-                          </MessageContent>
-                        </Message>
-                      ))}
+                      {messages.map((message, index) => {
+                        const isLastMessage = index === messages.length - 1
+                        const isStreaming = isLoading && isLastMessage && message.role === 'assistant'
+                        
+                        return (
+                          <Message key={message.id} from={message.role}>
+                            <MessageAvatar
+                              src={message.role === 'user' ? '/user-avatar.png' : '/bot-avatar.png'}
+                              name={message.role === 'user' ? 'You' : 'AI'}
+                            />
+                            <MessageContent>
+                              {/* Add reasoning display for assistant messages */}
+                              {message.role === 'assistant' && (
+                                <Reasoning
+                                  isStreaming={isStreaming}
+                                  defaultOpen={false}
+                                  duration={isStreaming ? 0 : Math.floor(Math.random() * 3) + 1}
+                                >
+                                  <ReasoningTrigger />
+                                  <ReasoningContent>
+                                    Analyzing the request and determining the best approach to provide a helpful and accurate response. Considering context, technical requirements, and user needs.
+                                  </ReasoningContent>
+                                </Reasoning>
+                              )}
+                              
+                              <ArtifactMessageComponent 
+                                message={message}
+                              />
+                              
+                              {/* Add message actions for assistant messages */}
+                              {message.role === 'assistant' && message.content && (
+                                <Actions className="mt-2">
+                                  <Action
+                                    tooltip="Copy message"
+                                    onClick={() => handleCopyMessage(message.content)}
+                                  >
+                                    <Copy size={14} />
+                                  </Action>
+                                  <Action
+                                    tooltip="Good response"
+                                    onClick={() => console.log('Thumbs up:', message.id)}
+                                  >
+                                    <ThumbsUp size={14} />
+                                  </Action>
+                                  <Action
+                                    tooltip="Poor response"
+                                    onClick={() => console.log('Thumbs down:', message.id)}
+                                  >
+                                    <ThumbsDown size={14} />
+                                  </Action>
+                                  <Action
+                                    tooltip="Regenerate response"
+                                    onClick={() => handleRegenerateResponse(message.id)}
+                                  >
+                                    <RefreshCw size={14} />
+                                  </Action>
+                                  <Action
+                                    tooltip="Share message"
+                                    onClick={() => console.log('Share:', message.id)}
+                                  >
+                                    <Share size={14} />
+                                  </Action>
+                                  <Action
+                                    tooltip="Save message"
+                                    onClick={() => console.log('Save:', message.id)}
+                                  >
+                                    <BookmarkPlus size={14} />
+                                  </Action>
+                                </Actions>
+                              )}
+                            </MessageContent>
+                          </Message>
+                        )
+                      })}
                       
                       {isLoading && (
                         <Message from="assistant">
@@ -512,22 +936,85 @@ function AIChatPage() {
             </div>
 
             <div className='border-t p-4 flex-shrink-0'>
+              {/* Add contextual suggestions */}
+              {!isLoading && (
+                <div className="mb-4">
+                  <p className="text-sm text-muted-foreground mb-2">
+                    {messages.length === 0 ? 'Try these suggestions:' : 'Continue with:'}
+                  </p>
+                  <Suggestions>
+                    {getContextualSuggestions().map((suggestion, index) => (
+                      <Suggestion
+                        key={index}
+                        suggestion={suggestion}
+                        onClick={handleSuggestionClick}
+                      />
+                    ))}
+                  </Suggestions>
+                </div>
+              )}
+              
+              {/* Live Transcription Display */}
+              {isVoiceMode && (isRecording || liveTranscription) && (
+                <div className='bg-blue-50 border border-blue-200 rounded-lg p-3 min-h-[60px] mb-4'>
+                  <div className='flex items-center gap-2 mb-2'>
+                    <div className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} />
+                    <span className='text-sm font-medium text-blue-700'>
+                      {isRecording ? 'Listening...' : 'Transcription Complete'}
+                    </span>
+                  </div>
+                  <div className='text-sm text-gray-700'>
+                    {liveTranscription || (isRecording ? 'Start speaking...' : '')}
+                  </div>
+                </div>
+              )}
+
               <form onSubmit={handleSubmit}>
                 <div className='flex gap-2'>
-                  <Input
-                    value={input}
-                    onChange={handleInputChange}
-                    placeholder='Type your message...'
-                    disabled={isLoading}
-                    className='flex-1'
-                  />
-                  <Button type='submit' disabled={isLoading || !input.trim()}>
-                    {isLoading ? (
-                      <Loader2 className='h-4 w-4 animate-spin' />
-                    ) : (
-                      <Send className='h-4 w-4' />
-                    )}
-                  </Button>
+                  <div className='flex-1 relative'>
+                    <Input
+                      value={input}
+                      onChange={handleInputChange}
+                      placeholder={isVoiceMode ? 'Click microphone to speak...' : 'Type your message...'}
+                      disabled={isLoading || isRecording}
+                      className='pr-12'
+                    />
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='sm'
+                      onClick={toggleVoiceMode}
+                      className='absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 p-0'
+                    >
+                      <Volume2 className={`h-4 w-4 ${isVoiceMode ? 'text-blue-500' : 'text-muted-foreground'}`} />
+                    </Button>
+                  </div>
+                  
+                  {isVoiceMode ? (
+                    <Button
+                      type='button'
+                      onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+                      disabled={isProcessingVoice}
+                      className={`${isRecording ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-500 hover:bg-blue-600'}`}
+                    >
+                      {isProcessingVoice ? (
+                        <Loader2 className='h-4 w-4 animate-spin' />
+                      ) : isRecording ? (
+                        <MicOff className='h-4 w-4' />
+                      ) : (
+                        <Mic className='h-4 w-4' />
+                      )}
+                    </Button>
+                  ) : (
+                    <Button type='submit' disabled={isLoading || !input.trim()}>
+                      {isLoading ? (
+                        <Loader2 className='h-4 w-4 animate-spin' />
+                      ) : (
+                        <Send className='h-4 w-4' />
+                      )}
+                    </Button>
+                  )}
+                  
                   {isLoading && (
                     <Button onClick={stop} variant='outline' type='button'>
                       Stop
