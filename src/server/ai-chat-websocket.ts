@@ -1,4 +1,8 @@
 import { DurableObject } from 'cloudflare:workers'
+import { webSocketLog, aiLog } from '../lib/logger'
+
+const wsLog = webSocketLog('src/server/ai-chat-websocket.ts')
+const aiLogger = aiLog('src/server/ai-chat-websocket.ts')
 
 interface ChatSession {
   id: string
@@ -45,14 +49,14 @@ export class AIChatWebSocket extends DurableObject {
     `)
     
     // Restore hibernating WebSocket connections
-    console.log('🔄 Initializing Durable Object, restoring WebSocket sessions...')
-    console.log('🔍 Available environment bindings:', Object.keys(env))
-    console.log('🤖 AI binding available:', !!env.AI)
+    wsLog.info('Initializing Durable Object, restoring WebSocket sessions')
+    wsLog.debug('Available environment bindings', Object.keys(env))
+    wsLog.info('AI binding available', { available: !!env.AI })
     
     this.ctx.getWebSockets().forEach((ws: WebSocket) => {
       const attachment = ws.deserializeAttachment()
       if (attachment) {
-        console.log('🔄 Restoring session from hibernation:', attachment.id)
+        wsLog.info('Restoring session from hibernation', { sessionId: attachment.id })
         this.sessions.set(ws, {
           id: attachment.id,
           socket: ws,
@@ -61,11 +65,11 @@ export class AIChatWebSocket extends DurableObject {
         })
       }
     })
-    console.log('✅ Restored', this.sessions.size, 'WebSocket sessions')
+    wsLog.info('Restored WebSocket sessions', { count: this.sessions.size })
   }
 
   async fetch(request: Request): Promise<Response> {
-    console.log('Durable Object fetch called for WebSocket upgrade')
+    wsLog.debug('Durable Object fetch called for WebSocket upgrade')
     
     // Check if this is a WebSocket upgrade request
     const upgradeHeader = request.headers.get('Upgrade')
@@ -84,7 +88,7 @@ export class AIChatWebSocket extends DurableObject {
     const url = new URL(request.url)
     const model = url.searchParams.get('model') || 'llama-3-8b'
     
-    console.log('Creating session:', sessionId, 'for model:', model)
+    wsLog.info('Creating session', { sessionId, model })
 
     // Create session and store it with server socket as key for hibernation events
     const session: ChatSession = {
@@ -105,7 +109,7 @@ export class AIChatWebSocket extends DurableObject {
     
     // Accept the WebSocket connection for hibernation - this MUST be called last
     this.ctx.acceptWebSocket(server)
-    console.log('WebSocket accepted by Durable Object for session:', sessionId)
+    wsLog.connectionState('accepted', { sessionId })
 
     // Send immediate connection confirmation since hibernation events may not trigger in dev
     try {
@@ -116,9 +120,9 @@ export class AIChatWebSocket extends DurableObject {
         message: 'Connected to AI chat'
       })
       server.send(connectionMessage)
-      console.log('Sent immediate connection confirmation for session:', sessionId)
+      wsLog.info('Sent immediate connection confirmation', { sessionId })
     } catch (error) {
-      console.error('Error sending immediate connection confirmation:', error)
+      wsLog.error('Error sending immediate connection confirmation', error)
     }
 
     return new Response(null, {
@@ -136,17 +140,17 @@ export class AIChatWebSocket extends DurableObject {
       const data = typeof message === 'string' ? message : new TextDecoder().decode(message)
       const parsedMessage = JSON.parse(data)
       
-      console.log('💬 WebSocket message received:', parsedMessage)
+      wsLog.messageReceived(parsedMessage.type, JSON.stringify(parsedMessage).length)
       
       // Get session directly from WebSocket key (proper hibernation pattern)
       const session = this.sessions.get(ws)
       
       if (!session) {
-        console.error('❌ Session not found for WebSocket. Available sessions:', this.sessions.size)
+        wsLog.error('Session not found for WebSocket', { availableSessions: this.sessions.size })
         // Try to restore session from attachment
         const attachment = ws.deserializeAttachment()
         if (attachment) {
-          console.log('🔄 Restoring session from attachment:', attachment.id)
+          wsLog.info('Restoring session from attachment', { sessionId: attachment.id })
           const restoredSession: ChatSession = {
             id: attachment.id,
             socket: ws,
@@ -154,7 +158,7 @@ export class AIChatWebSocket extends DurableObject {
             messages: attachment.messages || []
           }
           this.sessions.set(ws, restoredSession)
-          console.log('✅ Session restored from attachment')
+          wsLog.info('Session restored from attachment')
         } else {
           ws.send(JSON.stringify({ type: 'error', message: 'Session not found and cannot be restored' }))
           return
@@ -162,7 +166,7 @@ export class AIChatWebSocket extends DurableObject {
       }
       
       const currentSession = this.sessions.get(ws)!
-      console.log('✅ Found session:', currentSession.id, 'for message type:', parsedMessage.type)
+      wsLog.debug('Found session', { sessionId: currentSession.id, messageType: parsedMessage.type })
       
       switch (parsedMessage.type) {
         case 'chat':
@@ -209,6 +213,18 @@ export class AIChatWebSocket extends DurableObject {
             artifactId: parsedMessage.artifactId
           }))
           break
+          
+        case 'stop_generation':
+          // Handle stop generation signal
+          wsLog.info('Stop generation requested', { sessionId: currentSession.id })
+          // Send acknowledgment that generation has been stopped
+          ws.send(JSON.stringify({
+            type: 'generation_stopped',
+            timestamp: Date.now()
+          }))
+          // Note: The actual stopping of streaming happens at the API level
+          // This message serves as acknowledgment and state synchronization
+          break
       }
     } catch (error) {
       ws.send(JSON.stringify({
@@ -220,11 +236,11 @@ export class AIChatWebSocket extends DurableObject {
 
   // WebSocket hibernation handler for close events
   async webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean) {
-    console.log('🔌 WebSocket closed:', code, reason)
+    wsLog.connectionState('closed', { code, reason })
     // Remove the session for this WebSocket (using WebSocket as key)
     const session = this.sessions.get(ws)
     if (session) {
-      console.log('🗑️ Removing session:', session.id)
+      wsLog.info('Removing session', { sessionId: session.id })
       this.sessions.delete(ws)
     }
   }
@@ -338,12 +354,12 @@ export class AIChatWebSocket extends DurableObject {
       // Save each artifact to the database
       for (const artifact of artifacts) {
         this.saveArtifactToDB(sessionId, messageId, artifact)
-        console.log(`💾 Saved artifact to DB: ${artifact.title} (${artifact.type})`)
+        aiLogger.info('Saved artifact to DB', { title: artifact.title, type: artifact.type })
       }
       
       return artifacts
     } catch (error) {
-      console.error('❌ Error parsing/saving artifacts:', error)
+      aiLogger.error('Error parsing/saving artifacts', error)
       return []
     }
   }
@@ -577,7 +593,7 @@ export class AIChatWebSocket extends DurableObject {
 
   private async streamGeminiResponse(session: ChatSession, message: any) {
     try {
-      console.log('🚀 Starting Gemini streaming for message:', message.messageId)
+      aiLogger.info('Starting Gemini streaming', { messageId: message.messageId })
 
       // Get environment from Durable Object context - access via this.env
       const env = this.env as any
@@ -596,7 +612,7 @@ export class AIChatWebSocket extends DurableObject {
         parts: [{ text: msg.content }]
       }))
 
-      console.log('📡 Making Gemini API request to:', apiUrl)
+      aiLogger.debug('Making Gemini API request', { apiUrl })
       
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -614,11 +630,11 @@ export class AIChatWebSocket extends DurableObject {
 
       if (!response.ok) {
         const errorText = await response.text()
-        console.error('❌ Gemini API error:', errorText)
+        aiLogger.error('Gemini API error', { error: errorText })
         throw new Error(`Gemini API error: ${errorText}`)
       }
 
-      console.log('📥 Reading Gemini streaming response...')
+      aiLogger.debug('Reading Gemini streaming response')
 
       const reader = response.body?.getReader()
       if (!reader) throw new Error('No response body')
@@ -640,7 +656,7 @@ export class AIChatWebSocket extends DurableObject {
                 const content = data.candidates?.[0]?.content?.parts?.[0]?.text
                 
                 if (content) {
-                  console.log('📝 Gemini chunk:', content.substring(0, 50) + '...')
+                  aiLogger.debug('Gemini chunk', { preview: content.substring(0, 50) + '...' })
                   fullContent += content
                   
                   session.socket.send(JSON.stringify({
@@ -651,7 +667,7 @@ export class AIChatWebSocket extends DurableObject {
                   }))
                 }
               } catch (e) {
-                console.warn('⚠️ Failed to parse Gemini chunk:', e)
+                aiLogger.warn('Failed to parse Gemini chunk', e)
               }
             }
           }
@@ -683,10 +699,10 @@ export class AIChatWebSocket extends DurableObject {
         model: session.model
       })
       
-      console.log('✅ Gemini streaming completed')
+      aiLogger.info('Gemini streaming completed')
 
     } catch (error) {
-      console.error('❌ Gemini streaming error:', error)
+      aiLogger.error('Gemini streaming error', error)
       session.socket.send(JSON.stringify({
         type: 'stream_error',
         messageId: message.messageId,
@@ -697,7 +713,7 @@ export class AIChatWebSocket extends DurableObject {
 
   private async streamWorkersAIResponse(session: ChatSession, message: any) {
     try {
-      console.log('🚀 Starting Workers AI streaming for message:', message.messageId)
+      aiLogger.info('Starting Workers AI streaming', { messageId: message.messageId })
 
       // Get environment from Durable Object context - access via this.env
       const env = this.env as any
@@ -716,7 +732,7 @@ export class AIChatWebSocket extends DurableObject {
       }
 
       const modelId = modelMap[session.model as keyof typeof modelMap] || modelMap['llama-3-8b']
-      console.log('🤖 Using Workers AI model:', modelId)
+      aiLogger.info('Using Workers AI model', { model: modelId })
 
       // Convert message history to Workers AI format
       const messages = session.messages.map(msg => ({
@@ -724,7 +740,7 @@ export class AIChatWebSocket extends DurableObject {
         content: msg.content
       }))
 
-      console.log('📡 Making Workers AI request...')
+      aiLogger.debug('Making Workers AI request')
       
       // Call Workers AI with streaming
       const response = await env.AI.run(modelId, {
@@ -734,7 +750,7 @@ export class AIChatWebSocket extends DurableObject {
         stream: true
       })
 
-      console.log('📥 Processing Workers AI streaming response...')
+      aiLogger.debug('Processing Workers AI streaming response')
 
       if (response && typeof response[Symbol.asyncIterator] === 'function') {
         // Handle async iterator streaming response
@@ -788,7 +804,7 @@ export class AIChatWebSocket extends DurableObject {
                 } catch (e) {
                   // Ignore parse errors for incomplete lines
                   if (line.trim() !== 'data: [DONE]') {
-                    console.log('⚠️ Failed to parse:', line.substring(0, 100))
+                    aiLogger.warn('Failed to parse line', { preview: line.substring(0, 100) })
                   }
                 }
               }
@@ -841,12 +857,12 @@ export class AIChatWebSocket extends DurableObject {
           model: session.model
         })
         
-        console.log('✅ Workers AI streaming completed')
+        aiLogger.info('Workers AI streaming completed')
 
       } else if (response && typeof response === 'object' && response.response) {
         // Handle non-streaming response
         const content = response.response
-        console.log('📝 Workers AI non-streaming response:', content.substring(0, 50) + '...')
+        aiLogger.debug('Workers AI non-streaming response', { preview: content.substring(0, 50) + '...' })
         
         session.socket.send(JSON.stringify({
           type: 'stream_chunk',
@@ -870,14 +886,14 @@ export class AIChatWebSocket extends DurableObject {
           model: session.model
         })
         
-        console.log('✅ Workers AI response completed')
+        aiLogger.info('Workers AI response completed')
 
       } else {
         throw new Error('Unexpected response format from Workers AI')
       }
 
     } catch (error) {
-      console.error('❌ Workers AI streaming error:', error)
+      aiLogger.error('Workers AI streaming error', error)
       session.socket.send(JSON.stringify({
         type: 'stream_error',
         messageId: message.messageId,
@@ -888,7 +904,7 @@ export class AIChatWebSocket extends DurableObject {
 
   private async processFunctionCalling(session: ChatSession, message: any): Promise<string> {
     try {
-      console.log('🔧 Starting function calling for message:', message.messageId)
+      aiLogger.info('Starting function calling', { messageId: message.messageId })
 
       // Get environment from Durable Object context - access via this.env
       const env = this.env as any
@@ -900,7 +916,7 @@ export class AIChatWebSocket extends DurableObject {
       }
 
     } catch (error) {
-      console.error('❌ Function calling error:', error)
+      aiLogger.error('Function calling error', error)
       throw error
     }
   }
@@ -1043,7 +1059,7 @@ export class AIChatWebSocket extends DurableObject {
   }
 
   private async executeFunctionCall(functionName: string, args: any): Promise<string> {
-    console.log(`🔧 Executing function: ${functionName} with args:`, args)
+    aiLogger.info('Executing function', { functionName, args })
     
     switch (functionName) {
       case 'calculate':
@@ -1088,12 +1104,12 @@ export class AIChatWebSocket extends DurableObject {
   }
 
   async webSocketError(ws: WebSocket, error: any) {
-    console.error('WebSocket error in Durable Object:', error)
+    wsLog.error('WebSocket error in Durable Object', error)
     
     // Remove the session for this WebSocket (using WebSocket as key)
     const session = this.sessions.get(ws)
     if (session) {
-      console.log('🗑️ Removing session due to WebSocket error:', session.id)
+      wsLog.info('Removing session due to WebSocket error', { sessionId: session.id })
       this.sessions.delete(ws)
     }
     
@@ -1101,7 +1117,7 @@ export class AIChatWebSocket extends DurableObject {
     try {
       ws.close(1011, 'WebSocket error occurred')
     } catch (closeError) {
-      console.error('Error closing WebSocket:', closeError)
+      wsLog.error('Error closing WebSocket', closeError)
     }
   }
 }

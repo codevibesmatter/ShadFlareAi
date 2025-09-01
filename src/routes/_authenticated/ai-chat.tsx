@@ -60,7 +60,8 @@ function AIChatPage() {
     isConnected: wsConnected, 
     sessionId, 
     sendChatMessage, 
-    setEnabled: setWebSocketEnabled 
+    setEnabled: setWebSocketEnabled,
+    stopGeneration: stopWebSocketGeneration
   } = useWebSocket({
     enabled: useWebSocketEnabled,
     model: selectedModel,
@@ -323,6 +324,11 @@ function AIChatPage() {
 
       case 'pong':
         console.log('🏓 Pong received')
+        break
+
+      case 'generation_stopped':
+        console.log('✅ Generation stopped confirmation received')
+        setIsLoading(false)
         break
 
       default:
@@ -598,9 +604,27 @@ function AIChatPage() {
   }
 
   const stop = () => {
+    console.log('🛑 Stopping generation...')
+    
+    // Stop HTTP requests if using HTTP mode or as fallback
     if (abortControllerRef.current) {
+      console.log('🛑 Aborting HTTP request')
       abortControllerRef.current.abort()
+      abortControllerRef.current = null
     }
+    
+    // Stop WebSocket generation if using WebSocket mode
+    if (useWebSocketEnabled && wsConnected) {
+      console.log('🛑 Stopping WebSocket generation')
+      const success = stopWebSocketGeneration()
+      if (!success) {
+        console.warn('⚠️ Failed to send WebSocket stop signal')
+      }
+    }
+    
+    // Always set loading to false
+    setIsLoading(false)
+    console.log('✅ Generation stopped')
   }
 
   const handleSuggestionClick = (suggestion: string) => {

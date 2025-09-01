@@ -28,6 +28,7 @@ export interface UseWebSocketReturn {
   disconnect: () => void
   send: (message: WebSocketMessage) => boolean
   setEnabled: (enabled: boolean) => void
+  stopGeneration: () => boolean
   
   // Chat-specific helpers
   sendChatMessage: (content: string, options?: { enableFunctionCalling?: boolean }) => boolean
@@ -132,6 +133,10 @@ export function useWebSocket(config: UseWebSocketConfig = {}): UseWebSocketRetur
     return wsManager.send(message)
   }, [])
 
+  const stopGeneration = useCallback((): boolean => {
+    return wsManager.stopGeneration()
+  }, [])
+
   return {
     // Status
     isConnected,
@@ -143,6 +148,7 @@ export function useWebSocket(config: UseWebSocketConfig = {}): UseWebSocketRetur
     disconnect,
     send,
     setEnabled,
+    stopGeneration,
     
     // Chat helpers
     sendChatMessage

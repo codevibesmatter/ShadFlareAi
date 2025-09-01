@@ -127,6 +127,30 @@ export class WebSocketManager {
   }
 
   /**
+   * Stop current generation/streaming
+   */
+  stopGeneration(): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.log('⚠️ WebSocket not connected, cannot send stop signal')
+      return false
+    }
+
+    try {
+      const stopMessage: WebSocketMessage = {
+        type: 'stop_generation',
+        timestamp: Date.now()
+      }
+      
+      console.log('🛑 Sending stop generation signal via WebSocket')
+      this.ws.send(JSON.stringify(stopMessage))
+      return true
+    } catch (error) {
+      console.error('❌ Failed to send stop generation signal:', error)
+      return false
+    }
+  }
+
+  /**
    * Enable/disable WebSocket functionality
    */
   setEnabled(enabled: boolean): void {
