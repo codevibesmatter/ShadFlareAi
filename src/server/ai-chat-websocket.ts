@@ -13,6 +13,7 @@ interface ChatSession {
 
 export class AIChatWebSocket extends DurableObject {
   private sessions = new Map<WebSocket, ChatSession>()
+  private activeStreams = new Map<string, boolean>() // Track active streams to allow cancellation
   private env: any
 
   constructor(ctx: any, env: any) {
@@ -217,13 +218,21 @@ export class AIChatWebSocket extends DurableObject {
         case 'stop_generation':
           // Handle stop generation signal
           wsLog.info('Stop generation requested', { sessionId: currentSession.id })
+          
+          // Stop all active streams for this session
+          const streamKeys = Array.from(this.activeStreams.keys())
+          for (const streamKey of streamKeys) {
+            if (streamKey.startsWith(currentSession.id)) {
+              wsLog.info('Stopping active stream', { streamKey })
+              this.activeStreams.set(streamKey, false) // Mark as stopped
+            }
+          }
+          
           // Send acknowledgment that generation has been stopped
           ws.send(JSON.stringify({
             type: 'generation_stopped',
             timestamp: Date.now()
           }))
-          // Note: The actual stopping of streaming happens at the API level
-          // This message serves as acknowledgment and state synchronization
           break
       }
     } catch (error) {
@@ -523,6 +532,10 @@ export class AIChatWebSocket extends DurableObject {
 
   private async handleStreamingChat(session: ChatSession, message: any) {
     try {
+      // Create stream tracking key
+      const streamKey = `${session.id}-${message.messageId}`
+      this.activeStreams.set(streamKey, true) // Mark as active
+      
       // Send stream start
       session.socket.send(JSON.stringify({
         type: 'stream_start',
@@ -533,11 +546,11 @@ export class AIChatWebSocket extends DurableObject {
       // For now, simulate streaming with the existing HTTP API
       if (session.model === 'gemini-2.5-flash-lite') {
         // Use Gemini API directly for streaming
-        const response = await this.streamGeminiResponse(session, message)
+        const response = await this.streamGeminiResponse(session, message, streamKey)
         return response
       } else {
         // Use Cloudflare Workers AI for streaming
-        const response = await this.streamWorkersAIResponse(session, message)
+        const response = await this.streamWorkersAIResponse(session, message, streamKey)
         return response
       }
 
@@ -547,6 +560,10 @@ export class AIChatWebSocket extends DurableObject {
         messageId: message.messageId,
         error: error instanceof Error ? error.message : String(error)
       }))
+    } finally {
+      // Clean up stream tracking
+      const streamKey = `${session.id}-${message.messageId}`
+      this.activeStreams.delete(streamKey)
     }
   }
 
@@ -591,7 +608,7 @@ export class AIChatWebSocket extends DurableObject {
     }
   }
 
-  private async streamGeminiResponse(session: ChatSession, message: any) {
+  private async streamGeminiResponse(session: ChatSession, message: any, streamKey: string) {
     try {
       aiLogger.info('Starting Gemini streaming', { messageId: message.messageId })
 
@@ -643,6 +660,12 @@ export class AIChatWebSocket extends DurableObject {
       
       try {
         while (true) {
+          // Check if stream has been cancelled
+          if (!this.activeStreams.get(streamKey)) {
+            aiLogger.info('Gemini stream cancelled, breaking out of loop', { streamKey })
+            break
+          }
+          
           const { done, value } = await reader.read()
           if (done) break
 
@@ -650,6 +673,12 @@ export class AIChatWebSocket extends DurableObject {
           const lines = text.split('\n')
 
           for (const line of lines) {
+            // Check cancellation before processing each line
+            if (!this.activeStreams.get(streamKey)) {
+              aiLogger.info('Gemini stream cancelled during line processing', { streamKey })
+              break
+            }
+            
             if (line.startsWith('data: ') && line !== 'data: [DONE]') {
               try {
                 const data = JSON.parse(line.slice(6))
@@ -676,13 +705,17 @@ export class AIChatWebSocket extends DurableObject {
         reader.releaseLock()
       }
 
-      // Send completion signal
-      session.socket.send(JSON.stringify({
-        type: 'stream_chunk',
-        messageId: message.messageId,
-        content: '',
-        done: true
-      }))
+      // Send completion signal only if stream wasn't cancelled
+      if (this.activeStreams.get(streamKey)) {
+        session.socket.send(JSON.stringify({
+          type: 'stream_chunk',
+          messageId: message.messageId,
+          content: '',
+          done: true
+        }))
+      } else {
+        aiLogger.info('Gemini stream was cancelled, not sending completion signal', { streamKey })
+      }
 
       // Save assistant message to SQLite
       if (fullContent.trim().length > 0) {
@@ -711,7 +744,7 @@ export class AIChatWebSocket extends DurableObject {
     }
   }
 
-  private async streamWorkersAIResponse(session: ChatSession, message: any) {
+  private async streamWorkersAIResponse(session: ChatSession, message: any, streamKey: string) {
     try {
       aiLogger.info('Starting Workers AI streaming', { messageId: message.messageId })
 
@@ -762,6 +795,12 @@ export class AIChatWebSocket extends DurableObject {
         const MIN_DELAY = 150 // Minimum delay between chunks (ms)
         
         const sendChunk = (content: string, isDone: boolean = false) => {
+          // Check if stream has been cancelled
+          if (!this.activeStreams.get(streamKey)) {
+            aiLogger.info('Stream cancelled, stopping chunk sending', { streamKey })
+            return false // Signal to stop processing
+          }
+          
           if (content.length > 0 || isDone) {
             session.socket.send(JSON.stringify({
               type: 'stream_chunk',
@@ -770,9 +809,16 @@ export class AIChatWebSocket extends DurableObject {
               done: isDone
             }))
           }
+          return true // Continue processing
         }
         
         for await (const chunk of response) {
+          // Check if stream has been cancelled before processing each chunk
+          if (!this.activeStreams.get(streamKey)) {
+            aiLogger.info('Stream cancelled, breaking out of loop', { streamKey })
+            break
+          }
+          
           // Handle Uint8Array chunks (decode to string)
           if (chunk instanceof Uint8Array) {
             const chunkText = new TextDecoder().decode(chunk)
@@ -796,7 +842,10 @@ export class AIChatWebSocket extends DurableObject {
                     // Send chunk when buffer reaches optimal size or after minimum delay
                     const now = Date.now()
                     if (contentBuffer.length >= CHUNK_SIZE || (now - lastSentTime) >= MIN_DELAY) {
-                      sendChunk(contentBuffer)
+                      if (!sendChunk(contentBuffer)) {
+                        // Stream was cancelled
+                        return
+                      }
                       contentBuffer = ''
                       lastSentTime = now
                     }
@@ -819,7 +868,10 @@ export class AIChatWebSocket extends DurableObject {
               // Send chunk when buffer reaches optimal size
               const now = Date.now()
               if (contentBuffer.length >= CHUNK_SIZE || (now - lastSentTime) >= MIN_DELAY) {
-                sendChunk(contentBuffer)
+                if (!sendChunk(contentBuffer)) {
+                  // Stream was cancelled
+                  return
+                }
                 contentBuffer = ''
                 lastSentTime = now
               }
@@ -827,20 +879,25 @@ export class AIChatWebSocket extends DurableObject {
           }
         }
         
-        // Send any remaining content in buffer
-        if (contentBuffer.length > 0) {
+        // Send any remaining content in buffer if stream wasn't cancelled
+        if (contentBuffer.length > 0 && this.activeStreams.get(streamKey)) {
           sendChunk(contentBuffer)
         }
 
-        // Send completion signal with proper timing
-        setTimeout(() => {
-          session.socket.send(JSON.stringify({
-            type: 'stream_chunk',
-            messageId: message.messageId,
-            content: '',
-            done: true
-          }))
-        }, 50) // Small delay to ensure all chunks are processed
+        // Send completion signal with proper timing only if stream wasn't cancelled
+        if (this.activeStreams.get(streamKey)) {
+          setTimeout(() => {
+            session.socket.send(JSON.stringify({
+              type: 'stream_chunk',
+              messageId: message.messageId,
+              content: '',
+              done: true
+            }))
+          }, 50) // Small delay to ensure all chunks are processed
+        } else {
+          // Stream was cancelled, send stop confirmation
+          aiLogger.info('Stream was cancelled, sending final stop signal', { streamKey })
+        }
 
         // Save assistant message to SQLite
         if (fullContent.trim().length > 0) {
