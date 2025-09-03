@@ -2,8 +2,6 @@
 
 A comprehensive full-stack AI-powered admin dashboard showcasing Cloudflare's complete suite of cloud and AI capabilities. Built on the foundation of the popular shadcn-admin template, this project demonstrates advanced integration with Cloudflare Workers, AI models, and real-time features.
 
-![ShadFlare AI Dashboard](public/images/shadcn-admin.png)
-
 **🚀 Live Demo:** Experience the full power of Cloudflare's edge computing and AI capabilities in a production-ready dashboard.
 
 ## 🌟 What Makes This Special
