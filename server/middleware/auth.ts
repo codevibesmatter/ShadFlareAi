@@ -1,6 +1,9 @@
 import type { Context } from 'hono';
 import { createAuth } from '../auth/config';
 import type { Env } from '../../worker';
+import { authLog } from '../../src/lib/logger';
+
+const authLogger = authLog('server/middleware/auth.ts');
 
 export async function requireAuth(c: Context<{ Bindings: Env }>) {
   const auth = createAuth(c.env);
@@ -27,7 +30,7 @@ export async function requireAuth(c: Context<{ Bindings: Env }>) {
     
     return null; // Continue to next handler
   } catch (error) {
-    console.error('Auth error:', error);
+    authLogger.error('Auth error', error);
     return c.json({ error: 'Authentication failed' }, 401);
   }
 }

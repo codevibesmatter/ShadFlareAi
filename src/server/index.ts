@@ -5,8 +5,12 @@ import { streamText } from 'ai'
 import { createWorkersAI } from 'workers-ai-provider'
 import { AIChatWebSocket } from './ai-chat-websocket'
 import { VoiceAIWebSocket } from './voice-ai-websocket'
+import { UserSysDO } from './durable-objects/user-sys-do'
 import { createAuth } from '../../server/auth/config'
 import * as routes from './routes'
+// import { testNova3Router } from './test-nova-3'  // Temporarily disabled due to syntax error
+import { testOpusRouter } from './test-opus'
+import { testSimpleNova3Router } from './test-simple-nova3'
 import { z } from '@hono/zod-openapi'
 // import { runWithTools } from '@cloudflare/ai-utils'
 
@@ -61,6 +65,7 @@ export interface Env {
   ASSETS: Fetcher;
   AI_CHAT_WEBSOCKET: DurableObjectNamespace;
   VOICE_AI_WEBSOCKET: DurableObjectNamespace;
+  USER_SYS_DO: DurableObjectNamespace;
   BETTER_AUTH_SECRET?: string;
   BETTER_AUTH_URL?: string;
   GOOGLE_CLIENT_ID?: string;
@@ -172,7 +177,7 @@ app.get('/api/ui', (c) => {
 </html>`)
 })
 
-// Better Auth routes
+// Better Auth routes (WebSocket broadcast handled by databaseHooks in config)
 app.all('/api/auth/*', async (c) => {
   const auth = createAuth(c.env)
   return auth.handler(c.req.raw)
@@ -1440,6 +1445,78 @@ app.openapi(routes.healthRoute, (c) => {
   )
 })
 
+// Nova-3 testing route - temporarily disabled
+// app.route('/api', testNova3Router)
+
+// Opus testing route
+app.route('/api', testOpusRouter)
+
+// Simple Nova-3 testing route
+app.route('/api', testSimpleNova3Router)
+
+// TTS testing endpoint
+app.post('/api/tts-test', async (c) => {
+  try {
+    console.log('🗣️ TTS test request received')
+    
+    if (!c.env.AI) {
+      return c.json({ error: 'AI binding not available' }, 500)
+    }
+
+    const { text, voice, speaker, encoding, sample_rate } = await c.req.json()
+    
+    if (!text || !text.trim()) {
+      return c.json({ error: 'Text is required' }, 400)
+    }
+
+    console.log(`🎵 Generating TTS: voice=${voice}, speaker=${speaker}, text="${text.substring(0, 50)}..."`)
+    
+    // Use Aura-1 for text-to-speech
+    const aiModel = voice || '@cf/deepgram/aura-1'
+    
+    const aiResponse = await c.env.AI.run(aiModel, {
+      text: text.trim(),
+      speaker: speaker || 'angus'
+    }, {
+      returnRawResponse: true
+    })
+
+    if (aiResponse && aiResponse instanceof Response) {
+      console.log('✅ TTS generation successful')
+      
+      // Get the audio buffer
+      const audioBuffer = await aiResponse.arrayBuffer()
+      console.log(`🎵 Audio buffer size: ${audioBuffer.byteLength} bytes`)
+      
+      // Check if we got valid audio data
+      if (audioBuffer.byteLength === 0) {
+        console.warn('⚠️ Empty audio buffer received')
+        return c.json({ error: 'Empty audio generated' }, 500)
+      }
+      
+      // Return the audio response with proper headers for browser compatibility
+      return new Response(audioBuffer, {
+        headers: {
+          'Content-Type': 'audio/wav', // Try WAV instead of MPEG
+          'Content-Length': audioBuffer.byteLength.toString(),
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'no-cache',
+        },
+      })
+    }
+
+    console.warn('⚠️ No audio returned from TTS model')
+    return c.json({ error: 'No audio generated' }, 500)
+    
+  } catch (error) {
+    console.error('❌ TTS Error:', error)
+    return c.json({ 
+      error: 'TTS generation failed', 
+      message: error instanceof Error ? error.message : 'Unknown error'
+    }, 500)
+  }
+})
+
 // WebSocket endpoint for AI chat (must come before catch-all route)
 app.get('/ws/ai-chat', async (c) => {
   console.log('WebSocket endpoint hit:', c.req.path)
@@ -1508,6 +1585,75 @@ app.get('/ws/voice-ai', async (c) => {
   }
 })
 
+// UserSysDO endpoints for user-scoped real-time events
+app.get('/api/user-sys/:userId/events', async (c) => {
+  const userId = c.req.param('userId')
+  
+  if (!c.env.USER_SYS_DO) {
+    return c.json({ error: 'UserSys service unavailable' }, 503)
+  }
+
+  try {
+    const id = c.env.USER_SYS_DO.idFromName(`user-${userId}`)
+    const stub = c.env.USER_SYS_DO.get(id)
+    
+    // Forward SSE request to Durable Object
+    return stub.fetch(new Request(`${c.req.url}/events?userId=${userId}`, {
+      method: 'GET',
+      headers: c.req.raw.headers
+    }))
+  } catch (error) {
+    console.error('UserSysDO SSE error:', error)
+    return c.json({ error: 'Failed to connect to user events' }, 500)
+  }
+})
+
+app.post('/api/user-sys/:userId/broadcast', async (c) => {
+  const userId = c.req.param('userId')
+  
+  if (!c.env.USER_SYS_DO) {
+    return c.json({ error: 'UserSys service unavailable' }, 503)
+  }
+
+  try {
+    const event = await c.req.json()
+    const id = c.env.USER_SYS_DO.idFromName(`user-${userId}`)
+    const stub = c.env.USER_SYS_DO.get(id)
+    
+    return stub.fetch(new Request(`${c.req.url}/broadcast`, {
+      method: 'POST',
+      body: JSON.stringify({ ...event, userId }),
+      headers: { 'Content-Type': 'application/json' }
+    }))
+  } catch (error) {
+    console.error('UserSysDO broadcast error:', error)
+    return c.json({ error: 'Failed to broadcast event' }, 500)
+  }
+})
+
+app.get('/ws/user-sys/:userId', async (c) => {
+  const userId = c.req.param('userId')
+  
+  // Check for WebSocket upgrade
+  if (c.req.header('upgrade') !== 'websocket') {
+    return c.text('Expected Upgrade: websocket', 426)
+  }
+
+  if (!c.env.USER_SYS_DO) {
+    return c.text('UserSys WebSocket service unavailable', 503)
+  }
+
+  try {
+    const id = c.env.USER_SYS_DO.idFromName(`user-${userId}`)
+    const stub = c.env.USER_SYS_DO.get(id)
+    
+    return stub.fetch(c.req.raw)
+  } catch (error) {
+    console.error('UserSysDO WebSocket error:', error)
+    return c.text('UserSys WebSocket connection failed', 500)
+  }
+})
+
 // Handle static assets and SPA routing
 app.get('*', async (c) => {
   // Skip API routes - they should be handled above
@@ -1560,4 +1706,4 @@ app.get('*', async (c) => {
 
 
 export default app
-export { AIChatWebSocket, VoiceAIWebSocket }
+export { AIChatWebSocket, VoiceAIWebSocket, UserSysDO }

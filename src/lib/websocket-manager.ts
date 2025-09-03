@@ -4,6 +4,8 @@
  * Manages WebSocket connections outside of React to avoid lifecycle issues
  */
 
+import { createWebSocketLogger } from './logger'
+
 export interface WebSocketMessage {
   type: string
   content?: string
@@ -26,6 +28,7 @@ export class WebSocketManager {
   private reconnectTimer: NodeJS.Timeout | null = null
   private eventHandlers: Map<string, Set<WebSocketEventHandler>> = new Map()
   private isEnabled: boolean = true
+  private logger = createWebSocketLogger('websocket-manager.ts')
 
   constructor() {
     // Bind methods to preserve context
@@ -44,7 +47,7 @@ export class WebSocketManager {
   connect(model: string = 'llama-3-8b'): void {
     // Prevent multiple connections
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
-      console.log('WebSocket already connected or connecting')
+      this.logger.debug('WebSocket already connected or connecting')
       return
     }
 
@@ -60,7 +63,7 @@ export class WebSocketManager {
     wsUrl.searchParams.set('model', model)
     
     this.url = wsUrl.toString()
-    console.log('🔄 Connecting to WebSocket:', this.url)
+    this.logger.info('Connecting to WebSocket', { url: this.url })
 
     try {
       this.ws = new WebSocket(this.url)
@@ -69,7 +72,7 @@ export class WebSocketManager {
       this.ws.onclose = this.onClose
       this.ws.onerror = this.onError
     } catch (error) {
-      console.error('❌ Failed to create WebSocket:', error)
+      this.logger.error('Failed to create WebSocket', error)
       this.emit('error', { type: 'connection_error', error: error })
     }
   }
@@ -78,7 +81,7 @@ export class WebSocketManager {
    * Disconnect WebSocket
    */
   disconnect(): void {
-    console.log('🔌 Disconnecting WebSocket...')
+    this.logger.info('Disconnecting WebSocket...')
     
     // Clear reconnect timer
     if (this.reconnectTimer) {
@@ -109,18 +112,18 @@ export class WebSocketManager {
    */
   send(message: WebSocketMessage): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.error('❌ WebSocket not connected')
+      this.logger.error('WebSocket not connected')
       this.emit('error', { type: 'not_connected', message: 'WebSocket not connected' })
       return false
     }
 
     try {
       const messageStr = JSON.stringify(message)
-      console.log('📤 Sending WebSocket message:', messageStr)
+      this.logger.debug('Sending WebSocket message', { type: message.type, messageId: message.messageId })
       this.ws.send(messageStr)
       return true
     } catch (error) {
-      console.error('❌ Failed to send WebSocket message:', error)
+      this.logger.error('Failed to send WebSocket message', error)
       this.emit('error', { type: 'send_error', error: error })
       return false
     }
@@ -131,7 +134,7 @@ export class WebSocketManager {
    */
   stopGeneration(): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.log('⚠️ WebSocket not connected, cannot send stop signal')
+      this.logger.warn('WebSocket not connected, cannot send stop signal')
       return false
     }
 
@@ -141,11 +144,11 @@ export class WebSocketManager {
         timestamp: Date.now()
       }
       
-      console.log('🛑 Sending stop generation signal via WebSocket')
+      this.logger.debug('Sending stop generation signal via WebSocket')
       this.ws.send(JSON.stringify(stopMessage))
       return true
     } catch (error) {
-      console.error('❌ Failed to send stop generation signal:', error)
+      this.logger.error('Failed to send stop generation signal', error)
       return false
     }
   }
@@ -207,7 +210,7 @@ export class WebSocketManager {
         try {
           handler(data)
         } catch (error) {
-          console.error('❌ Error in WebSocket event handler:', error)
+          this.logger.error('Error in WebSocket event handler', error)
         }
       })
     }
@@ -217,7 +220,7 @@ export class WebSocketManager {
    * Handle WebSocket open
    */
   private onOpen(): void {
-    console.log('✅ WebSocket connected successfully!')
+    this.logger.connectionState('connected')
     this.isConnected = true
     this.reconnectAttempts = 0
     
@@ -234,16 +237,16 @@ export class WebSocketManager {
    * Handle WebSocket message
    */
   private onMessage(event: MessageEvent): void {
-    console.log('📨 WebSocket message received:', event.data)
+    this.logger.messageReceived('message', event.data?.length)
     
     try {
       const data = JSON.parse(event.data) as WebSocketMessage
-      console.log('📨 Parsed message:', data)
+      this.logger.debug('Parsed message', { type: data.type, messageId: data.messageId })
       
       // Handle connection confirmation
       if (data.type === 'connection') {
         this.sessionId = data.sessionId || null
-        console.log('🔗 Connection established, session ID:', this.sessionId)
+        this.logger.connectionState('session_established', { sessionId: this.sessionId })
       }
       
       // Emit to all listeners
@@ -251,7 +254,7 @@ export class WebSocketManager {
       this.emit(data.type, data)
       
     } catch (error) {
-      console.error('❌ Failed to parse WebSocket message:', error, event.data)
+      this.logger.error('Failed to parse WebSocket message', error)
       this.emit('error', { type: 'parse_error', error: error, rawData: event.data })
     }
   }
@@ -260,7 +263,7 @@ export class WebSocketManager {
    * Handle WebSocket close
    */
   private onClose(event: CloseEvent): void {
-    console.log('🔌 WebSocket closed:', event.code, event.reason)
+    this.logger.connectionState('closed', { code: event.code, reason: event.reason })
     this.isConnected = false
     
     this.emit('disconnected', { 
@@ -279,7 +282,7 @@ export class WebSocketManager {
    * Handle WebSocket error
    */
   private onError(event: Event): void {
-    console.error('❌ WebSocket error:', event)
+    this.logger.error('WebSocket connection error', event)
     this.emit('error', { type: 'websocket_error', error: event })
   }
 
@@ -288,7 +291,7 @@ export class WebSocketManager {
    */
   private scheduleReconnect(): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('❌ Max reconnection attempts reached')
+      this.logger.error('Max reconnection attempts reached')
       this.emit('error', { 
         type: 'max_reconnects_reached', 
         attempts: this.reconnectAttempts 
@@ -299,11 +302,11 @@ export class WebSocketManager {
     this.reconnectAttempts++
     const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts - 1)
     
-    console.log(`🔄 Scheduling reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`)
+    this.logger.info('Scheduling reconnection attempt', { attempt: this.reconnectAttempts, maxAttempts: this.maxReconnectAttempts, delay })
     
     this.reconnectTimer = setTimeout(() => {
       if (this.isEnabled && (!this.ws || this.ws.readyState !== WebSocket.OPEN)) {
-        console.log(`🔄 Reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`)
+        this.logger.info('Starting reconnection attempt', { attempt: this.reconnectAttempts, maxAttempts: this.maxReconnectAttempts })
         this.connect()
       }
     }, delay)

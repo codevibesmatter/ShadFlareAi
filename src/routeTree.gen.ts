@@ -11,6 +11,15 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
+import { Route as AuthenticatedVoiceTestRouteImport } from './routes/_authenticated/voice-test'
+import { Route as AuthenticatedVoiceAiRouteImport } from './routes/_authenticated/voice-ai'
+import { Route as AuthenticatedTtsTestRouteImport } from './routes/_authenticated/tts-test'
+import { Route as AuthenticatedStoreDemoRouteImport } from './routes/_authenticated/store-demo'
+import { Route as AuthenticatedLegendDemoRouteImport } from './routes/_authenticated/legend-demo'
+import { Route as AuthenticatedConversationAiRouteImport } from './routes/_authenticated/conversation-ai'
+import { Route as AuthenticatedAiChatLegendTestRouteImport } from './routes/_authenticated/ai-chat-legend-test'
+import { Route as AuthenticatedAiChatLegendRouteImport } from './routes/_authenticated/ai-chat-legend'
+import { Route as AuthenticatedAiChatEnhancedRouteImport } from './routes/_authenticated/ai-chat-enhanced'
 import { Route as AuthenticatedAiChatRouteImport } from './routes/_authenticated/ai-chat'
 import { Route as errors503RouteImport } from './routes/(errors)/503'
 import { Route as errors500RouteImport } from './routes/(errors)/500'
@@ -44,6 +53,55 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedVoiceTestRoute = AuthenticatedVoiceTestRouteImport.update({
+  id: '/voice-test',
+  path: '/voice-test',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedVoiceAiRoute = AuthenticatedVoiceAiRouteImport.update({
+  id: '/voice-ai',
+  path: '/voice-ai',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedTtsTestRoute = AuthenticatedTtsTestRouteImport.update({
+  id: '/tts-test',
+  path: '/tts-test',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedStoreDemoRoute = AuthenticatedStoreDemoRouteImport.update({
+  id: '/store-demo',
+  path: '/store-demo',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedLegendDemoRoute = AuthenticatedLegendDemoRouteImport.update({
+  id: '/legend-demo',
+  path: '/legend-demo',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedConversationAiRoute =
+  AuthenticatedConversationAiRouteImport.update({
+    id: '/conversation-ai',
+    path: '/conversation-ai',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAiChatLegendTestRoute =
+  AuthenticatedAiChatLegendTestRouteImport.update({
+    id: '/ai-chat-legend-test',
+    path: '/ai-chat-legend-test',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAiChatLegendRoute =
+  AuthenticatedAiChatLegendRouteImport.update({
+    id: '/ai-chat-legend',
+    path: '/ai-chat-legend',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAiChatEnhancedRoute =
+  AuthenticatedAiChatEnhancedRouteImport.update({
+    id: '/ai-chat-enhanced',
+    path: '/ai-chat-enhanced',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedAiChatRoute = AuthenticatedAiChatRouteImport.update({
   id: '/ai-chat',
   path: '/ai-chat',
@@ -181,6 +239,15 @@ export interface FileRoutesByFullPath {
   '/500': typeof errors500Route
   '/503': typeof errors503Route
   '/ai-chat': typeof AuthenticatedAiChatRoute
+  '/ai-chat-enhanced': typeof AuthenticatedAiChatEnhancedRoute
+  '/ai-chat-legend': typeof AuthenticatedAiChatLegendRoute
+  '/ai-chat-legend-test': typeof AuthenticatedAiChatLegendTestRoute
+  '/conversation-ai': typeof AuthenticatedConversationAiRoute
+  '/legend-demo': typeof AuthenticatedLegendDemoRoute
+  '/store-demo': typeof AuthenticatedStoreDemoRoute
+  '/tts-test': typeof AuthenticatedTtsTestRoute
+  '/voice-ai': typeof AuthenticatedVoiceAiRoute
+  '/voice-test': typeof AuthenticatedVoiceTestRoute
   '/': typeof AuthenticatedIndexRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/settings/account': typeof AuthenticatedSettingsAccountRoute
@@ -206,6 +273,15 @@ export interface FileRoutesByTo {
   '/500': typeof errors500Route
   '/503': typeof errors503Route
   '/ai-chat': typeof AuthenticatedAiChatRoute
+  '/ai-chat-enhanced': typeof AuthenticatedAiChatEnhancedRoute
+  '/ai-chat-legend': typeof AuthenticatedAiChatLegendRoute
+  '/ai-chat-legend-test': typeof AuthenticatedAiChatLegendTestRoute
+  '/conversation-ai': typeof AuthenticatedConversationAiRoute
+  '/legend-demo': typeof AuthenticatedLegendDemoRoute
+  '/store-demo': typeof AuthenticatedStoreDemoRoute
+  '/tts-test': typeof AuthenticatedTtsTestRoute
+  '/voice-ai': typeof AuthenticatedVoiceAiRoute
+  '/voice-test': typeof AuthenticatedVoiceTestRoute
   '/': typeof AuthenticatedIndexRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/settings/account': typeof AuthenticatedSettingsAccountRoute
@@ -234,6 +310,15 @@ export interface FileRoutesById {
   '/(errors)/500': typeof errors500Route
   '/(errors)/503': typeof errors503Route
   '/_authenticated/ai-chat': typeof AuthenticatedAiChatRoute
+  '/_authenticated/ai-chat-enhanced': typeof AuthenticatedAiChatEnhancedRoute
+  '/_authenticated/ai-chat-legend': typeof AuthenticatedAiChatLegendRoute
+  '/_authenticated/ai-chat-legend-test': typeof AuthenticatedAiChatLegendTestRoute
+  '/_authenticated/conversation-ai': typeof AuthenticatedConversationAiRoute
+  '/_authenticated/legend-demo': typeof AuthenticatedLegendDemoRoute
+  '/_authenticated/store-demo': typeof AuthenticatedStoreDemoRoute
+  '/_authenticated/tts-test': typeof AuthenticatedTtsTestRoute
+  '/_authenticated/voice-ai': typeof AuthenticatedVoiceAiRoute
+  '/_authenticated/voice-test': typeof AuthenticatedVoiceTestRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/_authenticated/settings/account': typeof AuthenticatedSettingsAccountRoute
@@ -262,6 +347,15 @@ export interface FileRouteTypes {
     | '/500'
     | '/503'
     | '/ai-chat'
+    | '/ai-chat-enhanced'
+    | '/ai-chat-legend'
+    | '/ai-chat-legend-test'
+    | '/conversation-ai'
+    | '/legend-demo'
+    | '/store-demo'
+    | '/tts-test'
+    | '/voice-ai'
+    | '/voice-test'
     | '/'
     | '/errors/$error'
     | '/settings/account'
@@ -287,6 +381,15 @@ export interface FileRouteTypes {
     | '/500'
     | '/503'
     | '/ai-chat'
+    | '/ai-chat-enhanced'
+    | '/ai-chat-legend'
+    | '/ai-chat-legend-test'
+    | '/conversation-ai'
+    | '/legend-demo'
+    | '/store-demo'
+    | '/tts-test'
+    | '/voice-ai'
+    | '/voice-test'
     | '/'
     | '/errors/$error'
     | '/settings/account'
@@ -314,6 +417,15 @@ export interface FileRouteTypes {
     | '/(errors)/500'
     | '/(errors)/503'
     | '/_authenticated/ai-chat'
+    | '/_authenticated/ai-chat-enhanced'
+    | '/_authenticated/ai-chat-legend'
+    | '/_authenticated/ai-chat-legend-test'
+    | '/_authenticated/conversation-ai'
+    | '/_authenticated/legend-demo'
+    | '/_authenticated/store-demo'
+    | '/_authenticated/tts-test'
+    | '/_authenticated/voice-ai'
+    | '/_authenticated/voice-test'
     | '/_authenticated/'
     | '/_authenticated/errors/$error'
     | '/_authenticated/settings/account'
@@ -356,6 +468,69 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/voice-test': {
+      id: '/_authenticated/voice-test'
+      path: '/voice-test'
+      fullPath: '/voice-test'
+      preLoaderRoute: typeof AuthenticatedVoiceTestRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/voice-ai': {
+      id: '/_authenticated/voice-ai'
+      path: '/voice-ai'
+      fullPath: '/voice-ai'
+      preLoaderRoute: typeof AuthenticatedVoiceAiRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/tts-test': {
+      id: '/_authenticated/tts-test'
+      path: '/tts-test'
+      fullPath: '/tts-test'
+      preLoaderRoute: typeof AuthenticatedTtsTestRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/store-demo': {
+      id: '/_authenticated/store-demo'
+      path: '/store-demo'
+      fullPath: '/store-demo'
+      preLoaderRoute: typeof AuthenticatedStoreDemoRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/legend-demo': {
+      id: '/_authenticated/legend-demo'
+      path: '/legend-demo'
+      fullPath: '/legend-demo'
+      preLoaderRoute: typeof AuthenticatedLegendDemoRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/conversation-ai': {
+      id: '/_authenticated/conversation-ai'
+      path: '/conversation-ai'
+      fullPath: '/conversation-ai'
+      preLoaderRoute: typeof AuthenticatedConversationAiRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/ai-chat-legend-test': {
+      id: '/_authenticated/ai-chat-legend-test'
+      path: '/ai-chat-legend-test'
+      fullPath: '/ai-chat-legend-test'
+      preLoaderRoute: typeof AuthenticatedAiChatLegendTestRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/ai-chat-legend': {
+      id: '/_authenticated/ai-chat-legend'
+      path: '/ai-chat-legend'
+      fullPath: '/ai-chat-legend'
+      preLoaderRoute: typeof AuthenticatedAiChatLegendRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/ai-chat-enhanced': {
+      id: '/_authenticated/ai-chat-enhanced'
+      path: '/ai-chat-enhanced'
+      fullPath: '/ai-chat-enhanced'
+      preLoaderRoute: typeof AuthenticatedAiChatEnhancedRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/ai-chat': {
@@ -548,6 +723,15 @@ const AuthenticatedSettingsRouteRouteWithChildren =
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedSettingsRouteRoute: typeof AuthenticatedSettingsRouteRouteWithChildren
   AuthenticatedAiChatRoute: typeof AuthenticatedAiChatRoute
+  AuthenticatedAiChatEnhancedRoute: typeof AuthenticatedAiChatEnhancedRoute
+  AuthenticatedAiChatLegendRoute: typeof AuthenticatedAiChatLegendRoute
+  AuthenticatedAiChatLegendTestRoute: typeof AuthenticatedAiChatLegendTestRoute
+  AuthenticatedConversationAiRoute: typeof AuthenticatedConversationAiRoute
+  AuthenticatedLegendDemoRoute: typeof AuthenticatedLegendDemoRoute
+  AuthenticatedStoreDemoRoute: typeof AuthenticatedStoreDemoRoute
+  AuthenticatedTtsTestRoute: typeof AuthenticatedTtsTestRoute
+  AuthenticatedVoiceAiRoute: typeof AuthenticatedVoiceAiRoute
+  AuthenticatedVoiceTestRoute: typeof AuthenticatedVoiceTestRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedErrorsErrorRoute: typeof AuthenticatedErrorsErrorRoute
   AuthenticatedAppsIndexRoute: typeof AuthenticatedAppsIndexRoute
@@ -560,6 +744,15 @@ interface AuthenticatedRouteRouteChildren {
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedSettingsRouteRoute: AuthenticatedSettingsRouteRouteWithChildren,
   AuthenticatedAiChatRoute: AuthenticatedAiChatRoute,
+  AuthenticatedAiChatEnhancedRoute: AuthenticatedAiChatEnhancedRoute,
+  AuthenticatedAiChatLegendRoute: AuthenticatedAiChatLegendRoute,
+  AuthenticatedAiChatLegendTestRoute: AuthenticatedAiChatLegendTestRoute,
+  AuthenticatedConversationAiRoute: AuthenticatedConversationAiRoute,
+  AuthenticatedLegendDemoRoute: AuthenticatedLegendDemoRoute,
+  AuthenticatedStoreDemoRoute: AuthenticatedStoreDemoRoute,
+  AuthenticatedTtsTestRoute: AuthenticatedTtsTestRoute,
+  AuthenticatedVoiceAiRoute: AuthenticatedVoiceAiRoute,
+  AuthenticatedVoiceTestRoute: AuthenticatedVoiceTestRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedErrorsErrorRoute: AuthenticatedErrorsErrorRoute,
   AuthenticatedAppsIndexRoute: AuthenticatedAppsIndexRoute,

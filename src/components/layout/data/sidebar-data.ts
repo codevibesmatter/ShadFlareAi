@@ -22,6 +22,9 @@ import {
   Command,
   GalleryVerticalEnd,
   Bot,
+  Mic,
+  Volume2,
+  MessageCircle,
 } from 'lucide-react'
 import { type SidebarData } from '../types'
 
@@ -74,9 +77,24 @@ export const sidebarData: SidebarData = {
           icon: MessagesSquare,
         },
         {
-          title: 'AI Assistant',
+          title: 'AI Chat',
           url: '/ai-chat',
           icon: Bot,
+        },
+        {
+          title: 'Voice Test',
+          url: '/voice-test',
+          icon: Mic,
+        },
+        {
+          title: 'TTS Test',
+          url: '/tts-test',
+          icon: Volume2,
+        },
+        {
+          title: 'Conversation AI',
+          url: '/conversation-ai',
+          icon: MessageCircle,
         },
         {
           title: 'Users',

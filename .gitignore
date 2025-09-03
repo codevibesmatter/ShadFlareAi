@@ -25,3 +25,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Claude Code sessions
+sessions/
+.claude/autonomous.log
+.claude/autonomous-output.log

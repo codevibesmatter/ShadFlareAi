@@ -1,5 +1,8 @@
 import { createProvider } from 'ai';
 import { AI_MODELS, type ChatModel } from './models';
+import { aiLog } from '../../src/lib/logger';
+
+const aiLogger = aiLog('server/ai/provider.ts');
 
 export function createCloudflareProvider(ai: Ai) {
   return createProvider({
@@ -21,7 +24,7 @@ export function createCloudflareProvider(ai: Ai) {
           }),
         };
       } catch (error) {
-        console.error('AI provider error:', error);
+        aiLogger.error('AI provider error', error);
         throw new Error('Failed to generate response');
       }
     },
@@ -40,7 +43,7 @@ export async function generateEmbedding(
     
     return response.data?.[0] || null;
   } catch (error) {
-    console.error('Embedding generation error:', error);
+    aiLogger.error('Embedding generation error', error);
     return null;
   }
 }

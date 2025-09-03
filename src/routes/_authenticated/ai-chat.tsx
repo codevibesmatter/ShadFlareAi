@@ -27,6 +27,7 @@ import { Suggestions, Suggestion } from '@/components/suggestion'
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/reasoning'
 import { CodeBlock, CodeBlockCopyButton } from '@/components/code-block'
 import { Copy, ThumbsUp, ThumbsDown, RefreshCw, Share, BookmarkPlus } from 'lucide-react'
+import { aiLog, voiceLog } from '@/lib/logger'
 
 // Use ArtifactMessage type for enhanced message handling
 
@@ -67,7 +68,8 @@ function AIChatPage() {
     model: selectedModel,
     onMessage: handleWebSocketMessage,
     onError: (error) => {
-      console.error('WebSocket error:', error)
+      const logger = aiLog('ai-chat.tsx')
+      logger.error('WebSocket connection error', error)
       setError(error.message || 'WebSocket connection error')
     }
   })
@@ -78,8 +80,11 @@ function AIChatPage() {
 
   // Voice AI functions
   const startVoiceRecording = async () => {
+    const logger = aiLog('ai-chat.tsx')
+    const voiceLogger = voiceLog('ai-chat.tsx')
+    
     try {
-      console.log('🎤 Starting voice recording...')
+      voiceLogger.info('Starting voice recording...')
       setIsRecording(true)
       setIsProcessingVoice(false)
       
@@ -105,7 +110,7 @@ function AIChatPage() {
       voiceWsRef.current = voiceWs
       
       voiceWs.onopen = async () => {
-        console.log('🔗 Voice WebSocket connected')
+        voiceLogger.info('Voice WebSocket connected')
         
         // Start audio processing
         const audioContext = new AudioContext({ sampleRate: 16000 })
@@ -151,10 +156,10 @@ function AIChatPage() {
       
       voiceWs.onmessage = (event) => {
         const data = JSON.parse(event.data)
-        console.log('📰 Voice message received:', data.type)
+        voiceLogger.debug('Voice message received', { type: data.type })
         
         if (data.type === 'live_transcription' && data.text) {
-          console.log('📝 Live transcription:', data.text)
+          voiceLogger.debug('Live transcription received', { text: data.text.substring(0, 50) + '...' })
           
           // Update live transcription display
           setLiveTranscription(prev => {
@@ -170,25 +175,26 @@ function AIChatPage() {
           setInput(fullTranscription.trim())
         } else if (data.type === 'transcription' && data.text) {
           // Handle old format for compatibility
-          console.log('📋 Final transcription:', data.text)
+          voiceLogger.info('Final transcription received', { length: data.text.length })
           setInput(data.text)
           stopVoiceRecording()
         }
       }
       
       voiceWs.onerror = (error) => {
-        console.error('Voice WebSocket error:', error)
+        voiceLogger.error('Voice WebSocket error', error)
         stopVoiceRecording()
       }
       
     } catch (error) {
-      console.error('Error starting voice recording:', error)
+      voiceLogger.error('Error starting voice recording', error)
       setIsRecording(false)
     }
   }
 
   const stopVoiceRecording = () => {
-    console.log('🛑 Stopping voice recording...')
+    const voiceLogger = voiceLog('ai-chat.tsx')
+    voiceLogger.info('Stopping voice recording...')
     setIsRecording(false)
     setIsProcessingVoice(true)
     
@@ -229,9 +235,11 @@ function AIChatPage() {
       source.connect(audioContext.destination)
       source.start()
       
-      console.log('✅ AI audio response played successfully')
+      const voiceLogger = voiceLog('ai-chat.tsx')
+      voiceLogger.info('AI audio response played successfully')
     } catch (error) {
-      console.error('❌ Error playing audio response:', error)
+      const voiceLogger = voiceLog('ai-chat.tsx')
+      voiceLogger.error('Error playing audio response', error)
     }
   }
 
@@ -244,15 +252,16 @@ function AIChatPage() {
 
   // WebSocket message handler
   function handleWebSocketMessage(data: WebSocketMessage) {
-    console.log('📨 WebSocket message received:', data)
+    const logger = aiLog('ai-chat.tsx')
+    logger.debug('WebSocket message received', { type: data.type, messageId: data.messageId })
     
     switch (data.type) {
       case 'connection':
-        console.log('🔗 Connection established, session ID:', data.sessionId)
+        logger.info('Connection established', { sessionId: data.sessionId })
         break
         
       case 'stream_start':
-        console.log('🚀 Stream started for message:', data.messageId)
+        logger.info('Stream started', { messageId: data.messageId })
         setMessages(prev => [...prev, {
           id: data.messageId!,
           role: 'assistant',
@@ -263,7 +272,7 @@ function AIChatPage() {
         break
 
       case 'stream_chunk':
-        console.log('📝 Stream chunk received:', data.content)
+        logger.debug('Stream chunk received', { contentLength: data.content?.length, messageId: data.messageId })
         setMessages(prev => prev.map(msg =>
           msg.id === data.messageId
             ? { ...msg, content: msg.content + data.content }
@@ -271,7 +280,7 @@ function AIChatPage() {
         ))
 
         if (data.done) {
-          console.log('✅ Stream completed')
+          logger.info('Stream completed', { messageId: data.messageId })
           setIsLoading(false)
           
           // Parse artifacts from completed message if artifacts are enabled
@@ -295,7 +304,7 @@ function AIChatPage() {
         break
 
       case 'function_calling_complete':
-        console.log('🔧 Function calling completed:', data.content)
+        logger.info('Function calling completed', { messageId: data.messageId, contentLength: data.content?.length })
         const functionMessage: ArtifactMessage = {
           id: data.messageId!,
           role: 'assistant',
@@ -317,22 +326,22 @@ function AIChatPage() {
       case 'error':
       case 'stream_error':
       case 'function_calling_error':
-        console.error('❌ WebSocket error:', data.message || data.error)
+        logger.error('WebSocket error', data.message || data.error)
         setError(data.message || data.error)
         setIsLoading(false)
         break
 
       case 'pong':
-        console.log('🏓 Pong received')
+        logger.debug('Pong received')
         break
 
       case 'generation_stopped':
-        console.log('✅ Generation stopped confirmation received')
+        logger.info('Generation stopped confirmation received')
         setIsLoading(false)
         break
 
       default:
-        console.log('❓ Unknown message type:', data.type)
+        logger.warn('Unknown message type', { type: data.type })
     }
   }
 
@@ -379,14 +388,16 @@ function AIChatPage() {
 
   // WebSocket message sending helper
   const sendWebSocketMessage = (content: string) => {
+    const logger = aiLog('ai-chat.tsx')
+    
     if (!wsConnected) {
-      console.error('❌ WebSocket not connected')
+      logger.error('WebSocket not connected')
       setError('WebSocket not connected. Please try again.')
       return
     }
 
     const messageId = crypto.randomUUID()
-    console.log('📤 Sending message via WebSocket:', content, 'ID:', messageId)
+    logger.info('Sending message via WebSocket', { messageId, contentLength: content.length })
     
     // Store user message for artifact parsing
     lastUserMessageRef.current = content
@@ -604,27 +615,28 @@ function AIChatPage() {
   }
 
   const stop = () => {
-    console.log('🛑 Stopping generation...')
+    const logger = aiLog('ai-chat.tsx')
+    logger.info('Stopping generation...')
     
     // Stop HTTP requests if using HTTP mode or as fallback
     if (abortControllerRef.current) {
-      console.log('🛑 Aborting HTTP request')
+      logger.debug('Aborting HTTP request')
       abortControllerRef.current.abort()
       abortControllerRef.current = null
     }
     
     // Stop WebSocket generation if using WebSocket mode
     if (useWebSocketEnabled && wsConnected) {
-      console.log('🛑 Stopping WebSocket generation')
+      logger.debug('Stopping WebSocket generation')
       const success = stopWebSocketGeneration()
       if (!success) {
-        console.warn('⚠️ Failed to send WebSocket stop signal')
+        logger.warn('Failed to send WebSocket stop signal')
       }
     }
     
     // Always set loading to false
     setIsLoading(false)
-    console.log('✅ Generation stopped')
+    logger.info('Generation stopped')
   }
 
   const handleSuggestionClick = (suggestion: string) => {
@@ -805,13 +817,19 @@ function AIChatPage() {
                                   </Action>
                                   <Action
                                     tooltip="Good response"
-                                    onClick={() => console.log('Thumbs up:', message.id)}
+                                    onClick={() => {
+                                      const logger = aiLog('ai-chat.tsx')
+                                      logger.debug('Thumbs up clicked', { messageId: message.id })
+                                    }}
                                   >
                                     <ThumbsUp size={14} />
                                   </Action>
                                   <Action
                                     tooltip="Poor response"
-                                    onClick={() => console.log('Thumbs down:', message.id)}
+                                    onClick={() => {
+                                      const logger = aiLog('ai-chat.tsx')
+                                      logger.debug('Thumbs down clicked', { messageId: message.id })
+                                    }}
                                   >
                                     <ThumbsDown size={14} />
                                   </Action>
@@ -823,13 +841,19 @@ function AIChatPage() {
                                   </Action>
                                   <Action
                                     tooltip="Share message"
-                                    onClick={() => console.log('Share:', message.id)}
+                                    onClick={() => {
+                                      const logger = aiLog('ai-chat.tsx')
+                                      logger.debug('Share clicked', { messageId: message.id })
+                                    }}
                                   >
                                     <Share size={14} />
                                   </Action>
                                   <Action
                                     tooltip="Save message"
-                                    onClick={() => console.log('Save:', message.id)}
+                                    onClick={() => {
+                                      const logger = aiLog('ai-chat.tsx')
+                                      logger.debug('Save clicked', { messageId: message.id })
+                                    }}
                                   >
                                     <BookmarkPlus size={14} />
                                   </Action>

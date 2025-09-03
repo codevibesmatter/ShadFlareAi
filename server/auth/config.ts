@@ -5,6 +5,9 @@ import { anonymous, openAPI } from 'better-auth/plugins';
 import { drizzle } from 'drizzle-orm/d1';
 import * as schema from '../../database/auth.schema';
 import type { Env } from '../../worker';
+import { authLog } from '../../src/lib/logger';
+
+const authLogger = authLog('server/auth/config.ts');
 
 export function createAuth(env: Env, cf?: any) {
   // Use actual DB with schema for runtime
@@ -42,7 +45,7 @@ export function createAuth(env: Env, cf?: any) {
             delete: {
               after: async (session) => {
                 try {
-                  console.log('🔥 Session deleted via Better Auth hook:', { userId: session.userId });
+                  authLogger.info('Session deleted via Better Auth hook', { userId: session.userId });
                   
                   // Broadcast session invalidation to UserSysDO
                   if (session.userId && env.USER_SYS_DO) {
@@ -60,10 +63,10 @@ export function createAuth(env: Env, cf?: any) {
                       headers: { 'Content-Type': 'application/json' }
                     }));
                     
-                    console.log(`📢 Broadcasted session invalidation for user: ${session.userId}`);
+                    authLogger.info('Broadcasted session invalidation', { userId: session.userId });
                   }
                 } catch (error) {
-                  console.error('Failed to broadcast session invalidation:', error);
+                  authLogger.error('Failed to broadcast session invalidation', error);
                 }
               }
             }
