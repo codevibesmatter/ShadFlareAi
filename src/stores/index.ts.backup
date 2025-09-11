@@ -19,7 +19,7 @@ export type {
 } from './ai-chat'
 
 // Auth is now handled by Better Auth - export the simplified helpers
-export { useAuth, useAuthHelpers, logout, logoutAllDevices, useSession } from './auth-simple'
+export { useAuth, useAuthHelpers, logout, logoutAllDevices } from './auth-simple'
 
 // Root store interface for global state coordination
 export interface RootStore {
@@ -49,17 +49,24 @@ export const storeUtils = {
 
 // Development helpers
 if (process.env.NODE_ENV === 'development') {
-  // Attach stores to window for debugging (removed auth$ reference since it doesn't exist)
+  // Attach stores to window for debugging
   ;(globalThis as unknown as Record<string, unknown>).__LEGEND_STORES__ = {
+    auth: auth$,
     aiChat: aiChat$,
+    getAuth: () => auth$.get(),
     getAIChat: () => aiChat$.get(),
     resetAll: storeUtils.resetAll,
     getDebugState: storeUtils.getDebugState
   }
 }
 
-// Export AI Chat hooks (avoiding circular import by importing directly from hooks)
-export { 
+// Export React hooks
+export {
+  useAuth,
+  useAuthUser,
+  useAuthState,
+  useAuthSelector,
+  useAuthActions,
   useAIChat,
   useAIChatMessages,
   useAIChatSettings,
@@ -70,29 +77,6 @@ export {
   useAIChatActions,
   useStoreDebug
 } from './hooks'
-
-// Export auth compatibility hooks (legacy support)
-export const useAuthUser = () => {
-  const { user } = useAuth()
-  return user
-}
-
-export const useAuthState = () => {
-  const auth = useAuth()
-  return {
-    user: auth.user,
-    isAuthenticated: auth.isAuthenticated,
-    isLoading: auth.isLoading,
-    error: auth.error
-  }
-}
-
-// Legacy compatibility placeholders
-export const useAuthSelector = useAuthState
-export const useAuthActions = () => ({
-  logout,
-  logoutAllDevices
-})
 
 // Re-export Legend State utilities for convenience
 export { observable } from '@legendapp/state'

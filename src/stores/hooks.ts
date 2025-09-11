@@ -5,26 +5,7 @@
  */
 
 import { useSelector } from '@legendapp/state/react'
-import { auth$, aiChat$, authActions, aiChatActions } from './index'
-
-// Auth hooks
-export const useAuth = () => {
-  return useSelector(auth$)
-}
-
-export const useAuthUser = () => {
-  return useSelector(auth$.user)
-}
-
-export const useAuthState = () => {
-  return {
-    user: useSelector(auth$.user),
-    isAuthenticated: useSelector(auth$.isAuthenticated),
-    isLoading: useSelector(auth$.isLoading),
-    error: useSelector(auth$.error),
-    session: useSelector(auth$.session)
-  }
-}
+import { aiChat$, aiChatActions } from './ai-chat' // Import directly to avoid circular dependency
 
 // AI Chat hooks
 export const useAIChat = () => {
@@ -94,20 +75,11 @@ export const useAIChatState = () => {
   }
 }
 
-// Selector hooks (for compatibility with existing components)
-export const useAuthSelector = () => {
-  return useSelector(auth$)
-}
-
 export const useAIChatSelector = () => {
   return useSelector(aiChat$)
 }
 
 // Action hooks (return the actions directly)
-export const useAuthActions = () => {
-  return { authActions } 
-}
-
 export const useAIChatActions = () => {
   return { aiChatActions }
 }
@@ -115,7 +87,7 @@ export const useAIChatActions = () => {
 // Utility hooks
 export const useStoreDebug = () => {
   return {
-    auth: useSelector(auth$),
     aiChat: useSelector(aiChat$)
+    // auth is now handled by Better Auth's useSession
   }
 }

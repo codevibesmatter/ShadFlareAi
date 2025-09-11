@@ -5,7 +5,7 @@ import { LayoutProvider } from '@/context/layout-provider'
 import { SearchProvider } from '@/context/search-provider'
 import { AuthGuard } from '@/components/auth/auth-guard'
 import { useUserSysEvents } from '@/hooks/use-user-sys-events'
-import { useAuthUser } from '@/stores/hooks'
+import { useAuth } from '@/stores/auth-simple'
 import {
   SidebarContent,
   SidebarFooter,
@@ -27,10 +27,10 @@ type AuthenticatedLayoutProps = {
 
 export function AuthenticatedLayout({ children }: AuthenticatedLayoutProps) {
   const defaultOpen = getCookie('sidebar_state') !== 'false'
-  const user = useAuthUser()
+  const { user } = useAuth()
   
   // Connect to UserSysDO for remote auth events
-  useUserSysEvents(user?.accountNo || null)
+  useUserSysEvents(user?.id || null)
   
   return (
     <AuthGuard>

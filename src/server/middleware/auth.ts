@@ -1,12 +1,6 @@
 import { createMiddleware } from 'hono/factory'
-import { getCookie } from 'hono/cookie'
-import { drizzle } from 'drizzle-orm/d1'
-import { eq } from 'drizzle-orm'
-import { session, user } from '../../../database/schema'
-
-type Bindings = {
-  DB: D1Database
-}
+import { createAuth } from '../../../server/auth/config'
+import type { Env } from '../../../worker'
 
 type Variables = {
   user: {
@@ -15,44 +9,31 @@ type Variables = {
     name: string | null
     image: string | null
   }
+  session: any
 }
 
-export const requireAuth = createMiddleware<{ Bindings: Bindings; Variables: Variables }>(async (c, next) => {
+export const requireAuth = createMiddleware<{ Bindings: Env; Variables: Variables }>(async (c, next) => {
   try {
-    const sessionToken = c.req.header('Authorization')?.replace('Bearer ', '') ||
-                         getCookie(c, 'better-auth.session_token') ||
-                         c.req.query('session_token')
-
-    if (!sessionToken) {
-      return c.json({ error: 'No session token provided' }, 401)
-    }
-
-    const db = drizzle(c.env.DB)
+    const auth = createAuth(c.env)
     
-    // Find session and join with user data using manual SQL for compatibility
-    const sessionData = await db.execute(
-      'SELECT s.id as sessionId, s.token as sessionToken, s.expires_at as expiresAt, s.user_id as userId, u.email as userEmail, u.name as userName, u.image as userImage FROM sessions s INNER JOIN users u ON s.user_id = u.id WHERE s.token = ? LIMIT 1',
-      [sessionToken]
-    )
-
-    if (!sessionData.results?.length) {
-      return c.json({ error: 'Invalid session token' }, 401)
-    }
-
-    const sessionRecord = sessionData.results[0] as any
-
-    // Check if session is expired
-    if (sessionRecord.expiresAt && new Date(sessionRecord.expiresAt * 1000) < new Date()) {
-      return c.json({ error: 'Session expired' }, 401)
-    }
-
-    // Set user data in context
-    c.set('user', {
-      id: sessionRecord.userId,
-      email: sessionRecord.userEmail,
-      name: sessionRecord.userName,
-      image: sessionRecord.userImage,
+    // Use Better Auth's native session validation
+    const sessionData = await auth.api.getSession({
+      headers: c.req.raw.headers
     })
+
+    if (!sessionData?.session || !sessionData?.user) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
+    // Set user and session data in context
+    c.set('user', {
+      id: sessionData.user.id,
+      email: sessionData.user.email,
+      name: sessionData.user.name,
+      image: sessionData.user.image,
+    })
+    
+    c.set('session', sessionData.session)
 
     await next()
   } catch (error) {

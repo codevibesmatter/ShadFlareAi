@@ -39,39 +39,7 @@ export function createAuth(env: Env, cf?: any) {
         secret: env.BETTER_AUTH_SECRET || 'default-dev-secret-change-in-production',
         baseUrl: env.BETTER_AUTH_URL || 'http://localhost:5173',
         
-        // Session hooks for WebSocket broadcast
-        databaseHooks: {
-          session: {
-            delete: {
-              after: async (session) => {
-                try {
-                  authLogger.info('Session deleted via Better Auth hook', { userId: session.userId });
-                  
-                  // Broadcast session invalidation to UserSysDO
-                  if (session.userId && env.USER_SYS_DO) {
-                    const id = env.USER_SYS_DO.idFromName(`user-${session.userId}`);
-                    const stub = env.USER_SYS_DO.get(id);
-                    
-                    await stub.fetch(new Request(`http://localhost/broadcast`, {
-                      method: 'POST',
-                      body: JSON.stringify({
-                        type: 'session-invalidated',
-                        userId: session.userId,
-                        reason: 'session_deleted',
-                        timestamp: Date.now()
-                      }),
-                      headers: { 'Content-Type': 'application/json' }
-                    }));
-                    
-                    authLogger.info('Broadcasted session invalidation', { userId: session.userId });
-                  }
-                } catch (error) {
-                  authLogger.error('Failed to broadcast session invalidation', error);
-                }
-              }
-            }
-          }
-        },
+        // Use Better Auth's native session management - no custom hooks needed
         
         socialProviders: {
           google: env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET ? {

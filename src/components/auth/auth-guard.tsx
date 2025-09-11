@@ -1,12 +1,12 @@
 /**
- * Reactive Authentication Guard with Legend State v3
+ * Authentication Guard using Better Auth native patterns
  * 
- * Automatically redirects to sign-in when authentication state changes
+ * Redirects to sign-in when user is not authenticated
  */
 
+import { useEffect } from 'react'
 import { useNavigate, useLocation } from '@tanstack/react-router'
-import { useObserve } from '@legendapp/state/react'
-import { auth$, authActions } from '@/stores'
+import { useAuth } from '@/stores/auth-simple'
 
 interface AuthGuardProps {
   children: React.ReactNode
@@ -15,33 +15,22 @@ interface AuthGuardProps {
 export function AuthGuard({ children }: AuthGuardProps) {
   const navigate = useNavigate()
   const location = useLocation()
+  const { isAuthenticated, isLoading } = useAuth()
 
-  // Reactive observer - automatically runs when auth state changes
-  useObserve(() => {
-    const isAuthenticated = auth$.isAuthenticated.get()
-    const isLoading = auth$.isLoading.get()
-    
-    // When authentication becomes false, immediately redirect
+  useEffect(() => {
     if (!isLoading && !isAuthenticated) {
       const currentPath = location.href
       
-      // Store redirect path reactively
-      auth$.loginRedirectPath.set(currentPath)
-      
-      // Immediate reactive redirect
+      // Redirect to sign-in with current path for redirect after login
       navigate({
         to: '/sign-in',
         search: { redirect: currentPath },
         replace: true,
       })
     }
-  })
+  }, [isAuthenticated, isLoading, location.href, navigate])
 
-  // Reactive rendering based on auth state
-  const isAuthenticated = auth$.isAuthenticated.get()
-  const isLoading = auth$.isLoading.get()
-
-  // Show nothing while checking auth or if not authenticated
+  // Show nothing while loading or if not authenticated
   if (isLoading || !isAuthenticated) {
     return null
   }

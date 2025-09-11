@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useRef } from 'react'
-import { authActions } from '@/stores'
+import { logout } from '@/stores/auth-simple'
 
 export interface UserSystemEvent {
   type: 'session-invalidated' | 'notification' | 'system-announcement' | 'tab-sync'
@@ -55,7 +55,7 @@ export function useUserSysEvents(userId: string | null) {
           switch (userEvent.type) {
             case 'session-invalidated':
               console.log('🚪 Session invalidated, logging out...', userEvent.reason)
-              authActions.logout()
+              logout()
               break
 
             case 'notification':

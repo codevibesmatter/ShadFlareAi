@@ -6,7 +6,6 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { Loader2, LogIn } from 'lucide-react'
 import { toast } from 'sonner'
 import { IconFacebook, IconGithub } from '@/assets/brand-icons'
-import { authActions } from '@/stores'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -42,7 +41,6 @@ export function UserAuthForm({
 }: UserAuthFormProps) {
   const [isLoading, setIsLoading] = useState(false)
   const navigate = useNavigate()
-  // Use Legend State auth actions
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -66,20 +64,10 @@ export function UserAuthForm({
       } else if (result.data?.user) {
         const user = result.data.user
         
-        // Update auth store with user data
-        authActions.setUser({
-          accountNo: user.id,
-          email: user.email,
-          role: ['user'], // Default role, could be extended based on user.role if available
-          exp: Date.now() + 24 * 60 * 60 * 1000, // 24 hours from now
-        })
-        
-        // Set a session indicator (session is handled by Better Auth cookies)
-        authActions.setSession({ accessToken: 'better-auth-session' })
-        
         toast.success(`Welcome back, ${user.email}!`)
         
         // Redirect to the stored location or default to dashboard
+        // Better Auth handles all session state automatically via cookies
         const targetPath = redirectTo || '/'
         navigate({ to: targetPath, replace: true })
       }
