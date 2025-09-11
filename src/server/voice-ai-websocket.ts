@@ -14,6 +14,8 @@ interface VoiceSession {
   expectedWavChunks?: number // Total expected chunks
   isConversationMode?: boolean // Flag for conversation mode
   conversationHistory?: ConversationTurn[] // Chat history for context
+  transcriptionMode?: 'live' | 'turn' // New mode setting
+  isProcessingPartial?: boolean // Separate flag for partial transcription
 }
 
 interface ConversationTurn {
@@ -198,6 +200,10 @@ export class VoiceAIWebSocket extends DurableObject {
           
         case 'generate_tts':
           await this.handleGenerateTTS(sessionId, message)
+          break
+          
+        case 'update_voice':
+          await this.handleUpdateVoice(sessionId, message)
           break
           
         default:
@@ -417,30 +423,47 @@ export class VoiceAIWebSocket extends DurableObject {
 
     console.log(`🔊 Audio chunk received for session ${sessionId}, buffer size: ${buffer.length}, data length: ${message.data?.length || 0}`)
 
-    // Accumulate more audio before processing - Nova-3 needs substantial audio data
-    const minChunksForProcessing = 8 // Accumulate ~8 chunks (~16KB) for live feedback
+    // Real-time partial transcription + full transcription system
+    const minChunksForPartial = 3 // Partial transcription every 3 chunks (~6KB) for live feedback
+    const minChunksForFull = 8 // Full transcription every 8 chunks (~16KB) for accuracy
     const now = Date.now()
     const timeSinceLastCall = now - this.lastASRCallTime
     
-    // Process if we have enough chunks OR if we've been accumulating for too long
-    const hasEnoughChunks = buffer.length >= minChunksForProcessing
+    // Check for partial transcription (live feedback)
+    const hasPartialAudio = buffer.length >= minChunksForPartial && buffer.length % minChunksForPartial === 0
     const canCallAPI = timeSinceLastCall >= this.minASRInterval
-    const hasMinimumAudio = buffer.length >= 5 // At least 5 chunks for any transcription
+    const hasFullAudio = buffer.length >= minChunksForFull
     const accumulatingTooLong = buffer.length > 0 && timeSinceLastCall >= 8000 // 8+ seconds without processing
     
-    if (!session.isProcessing && hasMinimumAudio && canCallAPI && (hasEnoughChunks || accumulatingTooLong)) {
-      const reason = hasEnoughChunks ? 'enough chunks' : 'accumulating too long'
-      console.log(`🚀 Starting transcription processing (${reason}) with ${buffer.length} chunks (${Math.round(timeSinceLastCall/1000)}s since last call)...`)
-      this.lastASRCallTime = now
-      await this.processAccumulatedAudioChunks(sessionId)
-    } else if (session.isProcessing) {
-      console.log('⏳ Already processing, queuing chunk...')
-    } else if (!canCallAPI) {
-      console.log(`⏰ Rate limiting: ${Math.round((this.minASRInterval - timeSinceLastCall) / 1000)}s remaining, buffering chunk ${buffer.length}/${minChunksForProcessing}`)
-    } else if (!hasMinimumAudio) {
-      console.log(`📝 Need more audio... ${buffer.length}/5 minimum chunks`)
+    // Handle transcription based on mode
+    const isLiveMode = session.transcriptionMode === 'live'
+    console.log(`📝 Mode: ${session.transcriptionMode}, chunks: ${buffer.length}`)
+    
+    if (isLiveMode) {
+      // LIVE MODE: Show partial transcriptions, wait for explicit process_turn for full
+      if (!session.isProcessing && hasPartialAudio && canCallAPI && !hasFullAudio) {
+        console.log(`🔄 [LIVE] Partial transcription with ${buffer.length} chunks...`)
+        this.lastASRCallTime = now
+        await this.processPartialTranscription(sessionId)
+      }
+      // In live mode, don't auto-process full transcription - wait for process_turn message
+      else if (session.isProcessing) {
+        console.log('⏳ Already processing, queuing chunk...')
+      }
     } else {
-      console.log(`📝 Accumulating PCM audio... ${buffer.length}/${minChunksForProcessing} chunks`)
+      // TURN MODE: No partials, only process full transcription when ready
+      if (!session.isProcessing && (hasFullAudio || accumulatingTooLong) && canCallAPI) {
+        const reason = hasFullAudio ? 'full chunks' : 'accumulating too long'
+        console.log(`🚀 [TURN] Full transcription (${reason}) with ${buffer.length} chunks...`)
+        this.lastASRCallTime = now
+        await this.processAccumulatedAudioChunks(sessionId)
+      } else if (session.isProcessing) {
+        console.log('⏳ Already processing, queuing chunk...')
+      } else if (!canCallAPI) {
+        console.log(`⏰ Rate limiting: ${Math.round((this.minASRInterval - timeSinceLastCall) / 1000)}s remaining, buffering chunk ${buffer.length}`)
+      } else {
+        console.log(`📝 Accumulating audio... ${buffer.length} chunks (partial at ${minChunksForPartial}, full at ${minChunksForFull})`)
+      }
     }
 
     // Send metrics update
@@ -450,6 +473,76 @@ export class VoiceAIWebSocket extends DurableObject {
       bufferSize: buffer.length,
       quality: this.calculateAudioQuality(buffer)
     })
+  }
+
+  private async processPartialTranscription(sessionId: string) {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+
+    try {
+      // Don't set isProcessing for partial transcription to avoid blocking
+      
+      const buffer = this.audioBuffer.get(sessionId) || []
+      // Take last N chunks for partial transcription (not just unprocessed)
+      const chunksToProcess = buffer.slice(-6)  // Use most recent 6 chunks
+      
+      if (chunksToProcess.length < 6) {
+        console.log(`⏳ Not enough chunks for partial (${chunksToProcess.length}/6 required)`)
+        return
+      }
+      
+      console.log(`🔄 Processing ${chunksToProcess.length} chunks for partial transcription`)
+      
+      // Combine chunks for partial transcription
+      const combinedAudioData = this.combineAudioChunks(chunksToProcess)
+      
+      // Log audio data size for debugging
+      const audioSize = Buffer.from(combinedAudioData, 'base64').length
+      console.log(`📊 Partial audio size: ${audioSize} bytes (${chunksToProcess.length} chunks combined)`)
+      
+      // Create partial chunk - use actual sample rate from chunks
+      const partialChunk: AudioChunk = {
+        id: `partial-${Date.now()}`,
+        sessionId,
+        data: combinedAudioData,
+        timestamp: Date.now(),
+        processed: false,
+        format: 'pcm_s16le',
+        sampleRate: chunksToProcess[0]?.sampleRate || 16000
+      }
+
+      // Get partial transcription
+      console.log(`🎤 Calling STT for partial with model: ${session.model}`)
+      const transcriptionResult = await this.performSpeechToText(partialChunk, session.model)
+      
+      if (transcriptionResult && transcriptionResult.trim()) {
+        console.log(`✅ Partial transcription: "${transcriptionResult}"`)
+        
+        // Send partial transcription to client
+        this.sendMessage(sessionId, {
+          type: 'partial_transcription',
+          text: transcriptionResult,
+          timestamp: Date.now(),
+          isPartial: true
+        })
+      } else {
+        console.log('⚠️ Partial transcription returned empty/null')
+      }
+      
+    } catch (error) {
+      console.error('❌ Partial transcription error:', {
+        message: error?.message,
+        type: error?.constructor?.name,
+        stack: error?.stack?.slice(0, 300)
+      })
+      this.sendMessage(sessionId, {
+        type: 'error',
+        error: 'Partial transcription failed',
+        details: error?.message || String(error)
+      })
+    } finally {
+      // Don't modify isProcessing for partial transcription
+    }
   }
 
   private async processAccumulatedAudioChunks(sessionId: string) {
@@ -584,34 +677,37 @@ export class VoiceAIWebSocket extends DurableObject {
 
     // Different processing logic for conversation mode vs regular voice mode
     if (session.isConversationMode) {
-      // In conversation mode: Use Smart Turn v2 for turn detection
-      console.log(`🎯 Conversation mode: checking Smart Turn v2 with ${buffer.length} chunks`)
+      // Real-time partial transcription + full transcription system for conversation mode
+      const minChunksForPartial = 6 // Partial transcription every 6 chunks (~12KB) for better accuracy
+      const minChunksForFull = 12 // Full transcription every 12 chunks (~24KB) for final accuracy
+      const now = Date.now()
+      const timeSinceLastCall = now - this.lastASRCallTime
       
+      // Check for partial transcription (live feedback)
+      const hasPartialAudio = buffer.length >= minChunksForPartial && buffer.length % minChunksForPartial === 0
+      const canCallAPI = timeSinceLastCall >= this.minASRInterval
+      const hasFullAudio = buffer.length >= minChunksForFull
+      const accumulatingTooLong = buffer.length > 0 && timeSinceLastCall >= 8000 // 8+ seconds without processing
+      
+      // Handle partial transcription for real-time feedback (only in live mode)
+      if (session.transcriptionMode === 'live' && !session.isProcessing && hasPartialAudio && canCallAPI && !hasFullAudio) {
+        console.log(`🔄 Starting partial transcription with ${buffer.length} chunks for live feedback...`)
+        this.lastASRCallTime = now
+        await this.processPartialTranscription(sessionId)
+      }
       // Skip processing if already processing a conversation turn
-      if (session.isProcessing) {
+      else if (session.isProcessing) {
         console.log('⏳ Already processing conversation turn, skipping...')
         return
+      } else if (!canCallAPI) {
+        console.log(`⏰ Rate limiting: ${Math.round((this.minASRInterval - timeSinceLastCall) / 1000)}s remaining, buffering chunk ${buffer.length}`)
+      } else {
+        console.log(`🎯 Conversation mode: accumulating audio... ${buffer.length} chunks (partial at ${minChunksForPartial}, full at ${minChunksForFull})`)
       }
       
-      // Simple silence detection: check for low volume chunks after speech
-      if (buffer.length >= 4) {
-        const recentChunks = buffer.slice(-3) // Last 3 chunks
-        const hasLowVolumeRecently = recentChunks.some(chunk => this.calculateVolume(chunk) < 0.01) // Very quiet
-        const hasHighVolumeEarlier = buffer.slice(0, -2).some(chunk => this.calculateVolume(chunk) > 0.1) // Had speech
-        
-        if (hasHighVolumeEarlier && hasLowVolumeRecently && buffer.length >= 6) {
-          console.log('🔇 Silence detected after speech - processing conversation turn')
-          await this.processConversationTurn(sessionId)
-          return
-        }
-      }
+      // No server-side turn detection for final processing - wait for client to send process_turn message
+      // Just accumulate audio chunks for when the client triggers processing
       
-      // Fallback timeout if we have a lot of audio
-      if (buffer.length >= 15) {
-        console.log('⏰ Fallback: Processing conversation turn due to timeout')
-        await this.processConversationTurn(sessionId)
-        return
-      }
     } else {
       // Regular voice mode: Process immediately for live transcription
       const minChunksForProcessing = 5 // Fast threshold for responsive live transcription
@@ -808,13 +904,26 @@ export class VoiceAIWebSocket extends DurableObject {
       console.log(`🗣️ Performing TTS with voice: ${voice}`)
 
       // Use Aura-1 for text-to-speech
-      const aiModel = voice.includes('aura') ? '@cf/deepgram/aura-1' : '@cf/deepgram/aura-1'
+      const aiModel = '@cf/deepgram/aura-1'
+      
+      // Map voice parameter to valid speaker names
+      // Default to 'angus' if voice is just 'aura' or not recognized
+      const speakerMap: Record<string, string> = {
+        'aura': 'angus',
+        'aura-angus': 'angus',
+        'aura-stella': 'stella',
+        'aura-luna': 'luna',
+        'aura-orion': 'orion',
+        'aura-arcas': 'arcas',
+        'aura-perseus': 'perseus',
+        'aura-hera': 'hera'
+      }
+      
+      const speaker = speakerMap[voice] || 'angus'
       
       const aiResponse = await this.env.AI?.run(aiModel, {
-        text: text,
-        speaker: 'angus', // Default speaker, could be configurable
-        encoding: 'mp3',
-        sample_rate: 16000
+        text: text.trim(),
+        speaker: speaker
       }, {
         returnRawResponse: true
       })
@@ -978,12 +1087,15 @@ export class VoiceAIWebSocket extends DurableObject {
     }
     
     console.log('🎯 Starting conversational AI session with Smart Turn v2')
+    console.log('📋 Config received:', message.config)
     
     // Update session model configuration
     session.model = message.config?.sttModel || 'nova-3'
-    session.voice = message.config?.voice || 'angus'
+    // Keep the original voice parameter from session initialization (e.g., 'aura')
+    // Don't overwrite with 'angus' which is a speaker name, not a voice parameter
     session.isRecording = true
-    session.isConversationMode = true // Enable conversation mode
+    session.isConversationMode = true
+    session.transcriptionMode = message.config?.transcriptionMode || 'live' // Set mode from client
     session.conversationHistory = [] // Initialize conversation history
     
     // Send confirmation back to client
@@ -1048,10 +1160,14 @@ export class VoiceAIWebSocket extends DurableObject {
         console.log('🎤 Step 1: Performing STT with Nova-3')
         const transcription = await this.performSpeechToText(audioChunk, session.model)
         
+        console.log('🔍 Debug: transcription result:', { transcription, type: typeof transcription })
+        
         // Ensure transcription is a string and not empty
         const transcriptionText = (typeof transcription === 'string') ? transcription.trim() : String(transcription || '').trim()
         
-        if (transcriptionText) {
+        console.log('🔍 Debug: transcriptionText result:', { transcriptionText, length: transcriptionText?.length })
+        
+        if (transcriptionText && transcriptionText.length > 0) {
           // Add user message to conversation history
           const userTurn: ConversationTurn = {
             role: 'user',
@@ -1094,13 +1210,18 @@ export class VoiceAIWebSocket extends DurableObject {
             console.log('🗣️ Step 3: Generating speech with Aura-1')
             const audioResponse = await this.performTextToSpeech(llmResponse, session.voice)
             
+            console.log('🔍 Debug: audioResponse result:', { hasAudio: !!audioResponse, length: audioResponse?.length })
+            
             if (audioResponse) {
               // Send TTS audio to client
+              console.log('📤 Sending tts_ready to client')
               this.sendMessage(sessionId, {
                 type: 'tts_ready',
                 audioData: audioResponse,
                 timestamp: Date.now()
               })
+            } else {
+              console.warn('⚠️ No audio response from TTS - not sending tts_ready')
             }
           }
         }
@@ -1162,8 +1283,25 @@ export class VoiceAIWebSocket extends DurableObject {
   }
 
   private async handleProcessTurn(sessionId: string, message: any) {
-    // This is now handled by processConversationTurn for conversation mode
+    console.log('📨 Client-side turn detection triggered - processing conversation turn')
     await this.processConversationTurn(sessionId)
+  }
+  
+  private async handleUpdateVoice(sessionId: string, message: any) {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+    
+    console.log(`🎵 Updating voice for session ${sessionId} to: ${message.voice}`)
+    
+    // Update the session's voice preference
+    session.voice = message.voice
+    
+    // Send confirmation back to client
+    session.webSocket?.send(JSON.stringify({
+      type: 'voice_updated',
+      voice: message.voice,
+      timestamp: Date.now()
+    }))
   }
   
   private async handleGenerateResponse(sessionId: string, message: any) {
@@ -1318,8 +1456,9 @@ export class VoiceAIWebSocket extends DurableObject {
       
       console.log(`🎯 Smart Turn v2 result: complete=${turnResult.is_complete}, probability=${turnResult.probability}`)
       
-      // If turn is detected with reasonable confidence, process the complete turn
-      if (turnResult.is_complete || turnResult.probability > 0.3) {
+      // If turn is detected with high confidence, process the complete turn
+      // Increased threshold to prevent premature turn detection
+      if (turnResult.is_complete || turnResult.probability > 0.7) {
         console.log('✅ Smart Turn v2 detected end of turn - processing complete conversation turn')
         await this.processConversationTurn(sessionId)
       }
@@ -1364,8 +1503,8 @@ export class VoiceAIWebSocket extends DurableObject {
         return { is_complete: isComplete, probability }
       }
       
-      // Fallback: simple silence detection
-      return { is_complete: false, probability: 0.3 }
+      // Fallback: simple silence detection - lower probability to prevent premature turn detection
+      return { is_complete: false, probability: 0.1 }
       
     } catch (error) {
       console.error('❌ Smart Turn v2 error:', error)

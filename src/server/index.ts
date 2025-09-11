@@ -11,6 +11,8 @@ import * as routes from './routes'
 // import { testNova3Router } from './test-nova-3'  // Temporarily disabled due to syntax error
 import { testOpusRouter } from './test-opus'
 import { testSimpleNova3Router } from './test-simple-nova3'
+import ragRoutes from './routes/rag'
+import { tasksApp } from './routes/tasks'
 import { z } from '@hono/zod-openapi'
 // import { runWithTools } from '@cloudflare/ai-utils'
 
@@ -1259,94 +1261,11 @@ Response: ${JSON.stringify(responseData, null, 2)}`
 })
 
 // Mock data storage (in-memory for demo purposes)
-let mockTasks: any[] = [
-  { id: '1', title: 'Setup project', description: 'Initialize the new project', priority: 'high', status: 'completed', created: '2025-08-28T10:00:00Z' },
-  { id: '2', title: 'Implement API', description: 'Create REST API endpoints', priority: 'medium', status: 'in-progress', created: '2025-08-28T11:00:00Z' },
-  { id: '3', title: 'Write tests', description: 'Add unit and integration tests', priority: 'medium', status: 'pending', created: '2025-08-28T12:00:00Z' },
-]
-
 let mockUsers: any[] = [
   { id: '1', name: 'John Doe', email: 'john@example.com', role: 'admin', active: true, created: '2025-01-01T00:00:00Z' },
   { id: '2', name: 'Jane Smith', email: 'jane@example.com', role: 'user', active: true, created: '2025-01-15T00:00:00Z' },
   { id: '3', name: 'Bob Wilson', email: 'bob@example.com', role: 'user', active: false, created: '2025-02-01T00:00:00Z' },
 ]
-
-// Tasks API endpoints
-app.get('/api/tasks', (c) => {
-  return c.json({ 
-    success: true, 
-    data: mockTasks, 
-    total: mockTasks.length 
-  })
-})
-
-app.get('/api/tasks/:id', (c) => {
-  const id = c.req.param('id')
-  const task = mockTasks.find(t => t.id === id)
-  
-  if (!task) {
-    return c.json({ success: false, error: 'Task not found' }, 404)
-  }
-  
-  return c.json({ success: true, data: task })
-})
-
-app.post('/api/tasks', async (c) => {
-  try {
-    const body = await c.req.json()
-    const { title, description, priority = 'medium' } = body
-    
-    if (!title) {
-      return c.json({ success: false, error: 'Title is required' }, 400)
-    }
-    
-    const newTask = {
-      id: (mockTasks.length + 1).toString(),
-      title,
-      description: description || '',
-      priority,
-      status: 'pending',
-      created: new Date().toISOString()
-    }
-    
-    mockTasks.push(newTask)
-    
-    return c.json({ success: true, data: newTask, message: 'Task created successfully' }, 201)
-  } catch (error) {
-    return c.json({ success: false, error: 'Invalid JSON body' }, 400)
-  }
-})
-
-app.put('/api/tasks/:id', async (c) => {
-  try {
-    const id = c.req.param('id')
-    const body = await c.req.json()
-    const taskIndex = mockTasks.findIndex(t => t.id === id)
-    
-    if (taskIndex === -1) {
-      return c.json({ success: false, error: 'Task not found' }, 404)
-    }
-    
-    mockTasks[taskIndex] = { ...mockTasks[taskIndex], ...body, id }
-    
-    return c.json({ success: true, data: mockTasks[taskIndex], message: 'Task updated successfully' })
-  } catch (error) {
-    return c.json({ success: false, error: 'Invalid JSON body' }, 400)
-  }
-})
-
-app.delete('/api/tasks/:id', (c) => {
-  const id = c.req.param('id')
-  const taskIndex = mockTasks.findIndex(t => t.id === id)
-  
-  if (taskIndex === -1) {
-    return c.json({ success: false, error: 'Task not found' }, 404)
-  }
-  
-  const deletedTask = mockTasks.splice(taskIndex, 1)[0]
-  
-  return c.json({ success: true, data: deletedTask, message: 'Task deleted successfully' })
-})
 
 // Users API endpoints
 app.get('/api/users', (c) => {
@@ -1453,6 +1372,12 @@ app.route('/api', testOpusRouter)
 
 // Simple Nova-3 testing route
 app.route('/api', testSimpleNova3Router)
+
+// RAG system routes
+app.route('/api/rag', ragRoutes)
+
+// Tasks routes with authentication and D1 database
+app.route('/', tasksApp)
 
 // TTS testing endpoint
 app.post('/api/tts-test', async (c) => {

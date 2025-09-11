@@ -18,11 +18,15 @@ export const SuccessSchema = z
 // Task schemas
 export const TaskSchema = z
   .object({
-    id: z.string().openapi({ example: '1' }),
+    id: z.string().openapi({ example: 'TASK-1234' }),
+    userId: z.string().openapi({ example: 'user_123' }),
     title: z.string().openapi({ example: 'Complete project setup' }),
-    description: z.string().optional().openapi({ example: 'Set up the initial project structure' }),
-    status: z.enum(['pending', 'in-progress', 'completed']).openapi({ example: 'pending' }),
-    priority: z.enum(['low', 'medium', 'high']).openapi({ example: 'medium' }),
+    description: z.string().nullable().openapi({ example: 'Set up the initial project structure' }),
+    status: z.enum(['backlog', 'todo', 'in progress', 'done', 'canceled']).openapi({ example: 'todo' }),
+    label: z.enum(['bug', 'feature', 'documentation']).nullable().openapi({ example: 'feature' }),
+    priority: z.enum(['low', 'medium', 'high', 'critical']).openapi({ example: 'medium' }),
+    assignee: z.string().nullable().openapi({ example: 'John Doe' }),
+    dueDate: z.string().nullable().openapi({ example: '2025-01-15T10:30:00Z' }),
     createdAt: z.string().openapi({ example: '2025-01-15T10:30:00Z' }),
     updatedAt: z.string().openapi({ example: '2025-01-15T10:30:00Z' }),
   })
@@ -32,8 +36,11 @@ export const CreateTaskSchema = z
   .object({
     title: z.string().min(1).openapi({ example: 'Complete project setup' }),
     description: z.string().optional().openapi({ example: 'Set up the initial project structure' }),
-    status: z.enum(['pending', 'in-progress', 'completed']).optional().openapi({ example: 'pending' }),
-    priority: z.enum(['low', 'medium', 'high']).optional().openapi({ example: 'medium' }),
+    status: z.enum(['backlog', 'todo', 'in progress', 'done', 'canceled']).optional().openapi({ example: 'todo' }),
+    label: z.enum(['bug', 'feature', 'documentation']).optional().openapi({ example: 'feature' }),
+    priority: z.enum(['low', 'medium', 'high', 'critical']).optional().openapi({ example: 'medium' }),
+    assignee: z.string().optional().openapi({ example: 'John Doe' }),
+    dueDate: z.string().optional().openapi({ example: '2025-01-15T10:30:00Z' }),
   })
   .openapi('CreateTask')
 
@@ -41,8 +48,11 @@ export const UpdateTaskSchema = z
   .object({
     title: z.string().min(1).optional().openapi({ example: 'Updated task title' }),
     description: z.string().optional().openapi({ example: 'Updated description' }),
-    status: z.enum(['pending', 'in-progress', 'completed']).optional().openapi({ example: 'in-progress' }),
-    priority: z.enum(['low', 'medium', 'high']).optional().openapi({ example: 'high' }),
+    status: z.enum(['backlog', 'todo', 'in progress', 'done', 'canceled']).optional().openapi({ example: 'in progress' }),
+    label: z.enum(['bug', 'feature', 'documentation']).optional().openapi({ example: 'bug' }),
+    priority: z.enum(['low', 'medium', 'high', 'critical']).optional().openapi({ example: 'high' }),
+    assignee: z.string().optional().openapi({ example: 'Jane Smith' }),
+    dueDate: z.string().optional().openapi({ example: '2025-01-20T10:30:00Z' }),
   })
   .openapi('UpdateTask')
 

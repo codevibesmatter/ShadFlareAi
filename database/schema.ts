@@ -94,6 +94,20 @@ export const promptTemplate = sqliteTable('promptTemplate', {
   createdAt: integer('createdAt', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 })
 
+export const task = sqliteTable('task', {
+  id: text('id').primaryKey(),
+  userId: text('userId').notNull(),
+  title: text('title').notNull(),
+  description: text('description'),
+  status: text('status', { enum: ['backlog', 'todo', 'in progress', 'done', 'canceled'] }).notNull().default('todo'),
+  label: text('label', { enum: ['bug', 'feature', 'documentation'] }),
+  priority: text('priority', { enum: ['low', 'medium', 'high', 'critical'] }).notNull().default('medium'),
+  assignee: text('assignee'),
+  dueDate: integer('dueDate', { mode: 'timestamp' }),
+  createdAt: integer('createdAt', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+  updatedAt: integer('updatedAt', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
+})
+
 // Export all tables as schema
 export const schema = {
   user,
@@ -104,4 +118,5 @@ export const schema = {
   message,
   knowledgeBase,
   promptTemplate,
+  task,
 }

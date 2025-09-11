@@ -18,6 +18,7 @@ export default defineConfig({
     cloudflare({
       inspectorPort: false,
       persistState: true,
+      wranglerArgs: ['--experimental-vectorize-bind-to-prod', '--env', 'development'],
     }),
   ],
   resolve: {
@@ -28,6 +29,9 @@ export default defineConfig({
   server: {
     port: 5174,
     strictPort: false, // Allow Vite to find next available port if 5174 is taken
+    watch: {
+      ignored: ['**/.wrangler/**', '**/node_modules/**'],
+    },
   },
   build: {
     chunkSizeWarningLimit: 1000,

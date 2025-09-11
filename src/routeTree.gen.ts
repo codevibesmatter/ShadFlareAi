@@ -15,6 +15,7 @@ import { Route as AuthenticatedVoiceTestRouteImport } from './routes/_authentica
 import { Route as AuthenticatedVoiceAiRouteImport } from './routes/_authenticated/voice-ai'
 import { Route as AuthenticatedTtsTestRouteImport } from './routes/_authenticated/tts-test'
 import { Route as AuthenticatedStoreDemoRouteImport } from './routes/_authenticated/store-demo'
+import { Route as AuthenticatedRagKnowledgeRouteImport } from './routes/_authenticated/rag-knowledge'
 import { Route as AuthenticatedLegendDemoRouteImport } from './routes/_authenticated/legend-demo'
 import { Route as AuthenticatedConversationAiRouteImport } from './routes/_authenticated/conversation-ai'
 import { Route as AuthenticatedAiChatLegendTestRouteImport } from './routes/_authenticated/ai-chat-legend-test'
@@ -73,6 +74,12 @@ const AuthenticatedStoreDemoRoute = AuthenticatedStoreDemoRouteImport.update({
   path: '/store-demo',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedRagKnowledgeRoute =
+  AuthenticatedRagKnowledgeRouteImport.update({
+    id: '/rag-knowledge',
+    path: '/rag-knowledge',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedLegendDemoRoute = AuthenticatedLegendDemoRouteImport.update({
   id: '/legend-demo',
   path: '/legend-demo',
@@ -244,6 +251,7 @@ export interface FileRoutesByFullPath {
   '/ai-chat-legend-test': typeof AuthenticatedAiChatLegendTestRoute
   '/conversation-ai': typeof AuthenticatedConversationAiRoute
   '/legend-demo': typeof AuthenticatedLegendDemoRoute
+  '/rag-knowledge': typeof AuthenticatedRagKnowledgeRoute
   '/store-demo': typeof AuthenticatedStoreDemoRoute
   '/tts-test': typeof AuthenticatedTtsTestRoute
   '/voice-ai': typeof AuthenticatedVoiceAiRoute
@@ -278,6 +286,7 @@ export interface FileRoutesByTo {
   '/ai-chat-legend-test': typeof AuthenticatedAiChatLegendTestRoute
   '/conversation-ai': typeof AuthenticatedConversationAiRoute
   '/legend-demo': typeof AuthenticatedLegendDemoRoute
+  '/rag-knowledge': typeof AuthenticatedRagKnowledgeRoute
   '/store-demo': typeof AuthenticatedStoreDemoRoute
   '/tts-test': typeof AuthenticatedTtsTestRoute
   '/voice-ai': typeof AuthenticatedVoiceAiRoute
@@ -315,6 +324,7 @@ export interface FileRoutesById {
   '/_authenticated/ai-chat-legend-test': typeof AuthenticatedAiChatLegendTestRoute
   '/_authenticated/conversation-ai': typeof AuthenticatedConversationAiRoute
   '/_authenticated/legend-demo': typeof AuthenticatedLegendDemoRoute
+  '/_authenticated/rag-knowledge': typeof AuthenticatedRagKnowledgeRoute
   '/_authenticated/store-demo': typeof AuthenticatedStoreDemoRoute
   '/_authenticated/tts-test': typeof AuthenticatedTtsTestRoute
   '/_authenticated/voice-ai': typeof AuthenticatedVoiceAiRoute
@@ -352,6 +362,7 @@ export interface FileRouteTypes {
     | '/ai-chat-legend-test'
     | '/conversation-ai'
     | '/legend-demo'
+    | '/rag-knowledge'
     | '/store-demo'
     | '/tts-test'
     | '/voice-ai'
@@ -386,6 +397,7 @@ export interface FileRouteTypes {
     | '/ai-chat-legend-test'
     | '/conversation-ai'
     | '/legend-demo'
+    | '/rag-knowledge'
     | '/store-demo'
     | '/tts-test'
     | '/voice-ai'
@@ -422,6 +434,7 @@ export interface FileRouteTypes {
     | '/_authenticated/ai-chat-legend-test'
     | '/_authenticated/conversation-ai'
     | '/_authenticated/legend-demo'
+    | '/_authenticated/rag-knowledge'
     | '/_authenticated/store-demo'
     | '/_authenticated/tts-test'
     | '/_authenticated/voice-ai'
@@ -496,6 +509,13 @@ declare module '@tanstack/react-router' {
       path: '/store-demo'
       fullPath: '/store-demo'
       preLoaderRoute: typeof AuthenticatedStoreDemoRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/rag-knowledge': {
+      id: '/_authenticated/rag-knowledge'
+      path: '/rag-knowledge'
+      fullPath: '/rag-knowledge'
+      preLoaderRoute: typeof AuthenticatedRagKnowledgeRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/legend-demo': {
@@ -728,6 +748,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedAiChatLegendTestRoute: typeof AuthenticatedAiChatLegendTestRoute
   AuthenticatedConversationAiRoute: typeof AuthenticatedConversationAiRoute
   AuthenticatedLegendDemoRoute: typeof AuthenticatedLegendDemoRoute
+  AuthenticatedRagKnowledgeRoute: typeof AuthenticatedRagKnowledgeRoute
   AuthenticatedStoreDemoRoute: typeof AuthenticatedStoreDemoRoute
   AuthenticatedTtsTestRoute: typeof AuthenticatedTtsTestRoute
   AuthenticatedVoiceAiRoute: typeof AuthenticatedVoiceAiRoute
@@ -749,6 +770,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAiChatLegendTestRoute: AuthenticatedAiChatLegendTestRoute,
   AuthenticatedConversationAiRoute: AuthenticatedConversationAiRoute,
   AuthenticatedLegendDemoRoute: AuthenticatedLegendDemoRoute,
+  AuthenticatedRagKnowledgeRoute: AuthenticatedRagKnowledgeRoute,
   AuthenticatedStoreDemoRoute: AuthenticatedStoreDemoRoute,
   AuthenticatedTtsTestRoute: AuthenticatedTtsTestRoute,
   AuthenticatedVoiceAiRoute: AuthenticatedVoiceAiRoute,

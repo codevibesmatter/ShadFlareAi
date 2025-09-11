@@ -16,15 +16,84 @@ id = "YOUR_KV_NAMESPACE_ID"
 binding = "SESSIONS"
 id = "YOUR_SESSIONS_NAMESPACE_ID"
 
+# Vectorize - Vector database for RAG
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "rag-knowledge-base"
+experimental_remote = true
+
+# R2 bucket for AutoRAG document storage
+[[r2_buckets]]
+binding = "R2_DOCUMENTS"
+bucket_name = "buildmantle-rag-documents"
+
+# AutoRAG - Fully managed RAG service
+[[autorag_stores]]
+binding = "AUTORAG"
+store_name = "buildmantletest"
+r2_source = "R2_DOCUMENTS"
+
 [ai]
 binding = "AI"
 
 # For development, we'll remove the problematic KV bindings and use minimal config
 [env.development]
 name = "shadcn-admin-dev"
+experimental_vectorize_bind_to_prod = true
 
 [env.development.ai]
 binding = "AI"
+
+[[env.development.vectorize]]
+binding = "VECTORIZE"
+index_name = "rag-knowledge-base"
+experimental_remote = true
+
+[[env.development.r2_buckets]]
+binding = "R2_DOCUMENTS"
+bucket_name = "buildmantle-rag-documents"
+
+[[env.development.autorag_stores]]
+binding = "AUTORAG"
+store_name = "buildmantletest"
+r2_source = "R2_DOCUMENTS"
+
+[[env.development.kv_namespaces]]
+binding = "KV"
+id = "YOUR_KV_NAMESPACE_ID"
+
+[[env.development.kv_namespaces]]
+binding = "SESSIONS"
+id = "YOUR_SESSIONS_NAMESPACE_ID"
+
+[[env.development.d1_databases]]
+binding = "DB"
+database_name = "shadcn-admin-db"
+database_id = "YOUR_DATABASE_ID"
+
+[[env.development.durable_objects.bindings]]
+name = "AI_CHAT_WEBSOCKET"
+class_name = "AIChatWebSocket"
+
+[[env.development.durable_objects.bindings]]
+name = "VOICE_AI_WEBSOCKET"
+class_name = "VoiceAIWebSocket"
+
+[[env.development.durable_objects.bindings]]
+name = "USER_SYS_DO"
+class_name = "UserSysDO"
+
+[env.development.vars]
+BETTER_AUTH_URL = "http://localhost:5173"
+BETTER_AUTH_SECRET = "CPmXy0XgIWaOICeanyyFhR5eFwyQgoSJ0LpGtgJrpHc="
+GOOGLE_CLIENT_ID = ""
+GOOGLE_CLIENT_SECRET = ""
+GITHUB_CLIENT_ID = ""
+GITHUB_CLIENT_SECRET = ""
+GOOGLE_API_KEY = ""
+AI_GATEWAY_URL = ""
+ELEVENLABS_API_KEY = ""
+DEEPGRAM_API_KEY = ""
 
 # Assets and SPA configuration (disabled for development)
 # [assets]

@@ -8,9 +8,12 @@ import { TasksDialogs } from './components/tasks-dialogs'
 import { TasksPrimaryButtons } from './components/tasks-primary-buttons'
 import { TasksProvider } from './components/tasks-provider'
 import { TasksTable } from './components/tasks-table'
-import { tasks } from './data/tasks'
+import { useTasks } from './hooks/use-tasks'
+import { Skeleton } from '@/components/ui/skeleton'
 
 export function Tasks() {
+  const { data: tasks, isLoading, error } = useTasks()
+
   return (
     <TasksProvider>
       <Header fixed>
@@ -33,7 +36,22 @@ export function Tasks() {
           <TasksPrimaryButtons />
         </div>
         <div className='-mx-4 flex-1 overflow-auto px-4 py-1 lg:flex-row lg:space-y-0 lg:space-x-12'>
-          <TasksTable data={tasks} />
+          {isLoading ? (
+            <div className='space-y-4'>
+              <Skeleton className='h-10 w-full' />
+              <Skeleton className='h-32 w-full' />
+              <Skeleton className='h-32 w-full' />
+              <Skeleton className='h-32 w-full' />
+            </div>
+          ) : error ? (
+            <div className='text-center py-8'>
+              <p className='text-muted-foreground'>
+                Failed to load tasks. Please try again.
+              </p>
+            </div>
+          ) : (
+            <TasksTable data={tasks || []} />
+          )}
         </div>
       </Main>
 

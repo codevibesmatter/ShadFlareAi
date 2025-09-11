@@ -8,6 +8,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { 
   Mic, 
   MicOff, 
@@ -32,6 +35,7 @@ interface ConversationTurn {
   audioUrl?: string
   confidence?: number
   processing?: boolean
+  isPartial?: boolean // For real-time transcription display
 }
 
 interface ConversationState {
@@ -51,18 +55,21 @@ function ConversationAIPage() {
   // Audio settings
   const [isEnabled, setIsEnabled] = useState(false)
   const [voiceVolume, setVoiceVolume] = useState(0.8)
-  const [selectedVoice, setSelectedVoice] = useState('angus')
+  const [selectedVoice, setSelectedVoice] = useState('aura-angus')
   const [isPlayingAudio, setIsPlayingAudio] = useState(false)
+  const [transcriptionMode, setTranscriptionMode] = useState<'live' | 'turn'>('live') // New mode setting
   
   // WebSocket connection - always enabled for connection, but conversation controlled by isEnabled
   const { 
     isConnected, 
     send,
     sendAudioChunk,
-    setEnabled 
+    setEnabled,
+    connect,
+    disconnect
   } = useVoiceWebSocket({
     enabled: true, // Always maintain WebSocket connection
-    voice: 'aura',
+    voice: selectedVoice,
     model: 'nova-3',
     onMessage: handleVoiceMessage,
     onError: (error) => {
@@ -78,8 +85,34 @@ function ConversationAIPage() {
   const audioContextRef = useRef<AudioContext | null>(null)
   const processorRef = useRef<ScriptProcessorNode | null>(null)
   
+  // Client-side turn detection state
+  const silenceThreshold = 0.003
+  const speechThreshold = 0.01
+  const recentVolumeHistoryRef = useRef<number[]>([])
+  const lastSpeechTimeRef = useRef<number>(0)
+  const turnProcessingRef = useRef<boolean>(false)
+  
   // Audio capture state
   const [isMicActive, setIsMicActive] = useState(false)
+  
+  // Track previous voice to detect changes
+  const prevVoiceRef = useRef(selectedVoice)
+  
+  // Send voice update message when voice changes
+  useEffect(() => {
+    if (selectedVoice !== prevVoiceRef.current && isConnected) {
+      console.log(`🔄 Voice changed from ${prevVoiceRef.current} to ${selectedVoice}, updating session...`)
+      prevVoiceRef.current = selectedVoice
+      
+      // Send voice update message to server
+      send({
+        type: 'update_voice',
+        voice: selectedVoice
+      })
+    } else if (selectedVoice !== prevVoiceRef.current) {
+      prevVoiceRef.current = selectedVoice
+    }
+  }, [selectedVoice, isConnected, send])
   
   // Helper function to convert base64 audio to blob
   const base64ToBlob = (base64: string, mimeType: string): Blob => {
@@ -231,22 +264,78 @@ function ConversationAIPage() {
           turnProgress: Math.min((data.chunkIndex || 0) * 5, 95)
         }))
         break
+      
+      case 'partial_transcription':
+        // Handle real-time partial transcription only in live mode
+        if (transcriptionMode === 'live' && data.text && data.text.trim()) {
+          console.log('🔄 Partial transcription received (live mode):', data.text)
+          
+          // Update or create partial transcription display
+          setConversation(prev => {
+            // Check if we already have a partial transcription entry
+            const lastIndex = prev.length - 1
+            const lastTurn = lastIndex >= 0 ? prev[lastIndex] : null
+            
+            if (lastTurn && lastTurn.type === 'user' && lastTurn.isPartial) {
+              // Update existing partial transcription
+              const updated = [...prev]
+              updated[lastIndex] = {
+                ...lastTurn,
+                text: data.text.trim(),
+                timestamp: new Date()
+              }
+              return updated
+            } else {
+              // Create new partial transcription entry
+              const partialTurn: ConversationTurn = {
+                id: `partial-${Date.now()}`,
+                type: 'user',
+                text: data.text.trim(),
+                timestamp: new Date(),
+                confidence: data.confidence,
+                isPartial: true // Mark as partial
+              }
+              return [...prev, partialTurn]
+            }
+          })
+        }
+        break
         
       case 'transcription_result':
         // Handle STT completion from the 4-model pipeline
         if (data.text && data.text.trim()) {
-          console.log('📝 STT transcription received:', data.text)
+          console.log('📝 Final STT transcription received:', data.text)
           
-          // Add transcription as user message
-          const userTurn: ConversationTurn = {
-            id: `user-${Date.now()}`,
-            type: 'user',
-            text: data.text.trim(),
-            timestamp: new Date(),
-            confidence: data.confidence
-          }
-          
-          setConversation(prev => [...prev, userTurn])
+          // Replace partial transcription with final result or add new message
+          setConversation(prev => {
+            const lastIndex = prev.length - 1
+            const lastTurn = lastIndex >= 0 ? prev[lastIndex] : null
+            
+            if (lastTurn && lastTurn.type === 'user' && lastTurn.isPartial) {
+              // Replace partial transcription with final result
+              console.log('🔄 Replacing partial transcription with final result')
+              const updated = [...prev]
+              updated[lastIndex] = {
+                ...lastTurn,
+                text: data.text.trim(),
+                timestamp: new Date(),
+                confidence: data.confidence,
+                isPartial: false // Mark as final
+              }
+              return updated
+            } else {
+              // Add new final transcription (shouldn't happen with partial system)
+              const userTurn: ConversationTurn = {
+                id: `user-${Date.now()}`,
+                type: 'user',
+                text: data.text.trim(),
+                timestamp: new Date(),
+                confidence: data.confidence,
+                isPartial: false
+              }
+              return [...prev, userTurn]
+            }
+          })
           setConversationState(prev => ({
             ...prev,
             phase: 'processing',
@@ -303,15 +392,56 @@ function ConversationAIPage() {
           const inputBuffer = event.inputBuffer
           const inputData = inputBuffer.getChannelData(0)
           
-          // Calculate audio level for silence detection
+          // Calculate audio level for turn detection
           let sum = 0
           for (let i = 0; i < inputData.length; i++) {
             sum += inputData[i] * inputData[i]
           }
           const rms = Math.sqrt(sum / inputData.length)
+          const currentTime = Date.now()
           
-          // Send audio if above silence threshold (0.003 similar to voice-test)
-          if (rms > 0.003) {
+          // Track volume history for turn detection (keep last 20 samples = ~5 seconds)
+          const volumeHistory = recentVolumeHistoryRef.current
+          volumeHistory.push(rms)
+          if (volumeHistory.length > 20) {
+            volumeHistory.shift()
+          }
+          
+          // Detect speech vs silence
+          const isSpeaking = rms > speechThreshold
+          const isSilence = rms < silenceThreshold
+          
+          if (isSpeaking) {
+            lastSpeechTimeRef.current = currentTime
+          }
+          
+          // Client-side turn detection: detect end of speech
+          const timeSinceSpeech = currentTime - lastSpeechTimeRef.current
+          const hasSpeechHistory = volumeHistory.some(v => v > speechThreshold)
+          const recentSilence = timeSinceSpeech > 800 // 800ms of silence for faster response
+          const isProcessing = turnProcessingRef.current
+          
+          // Trigger turn processing when: had speech, now silent for 800ms, not already processing
+          if (hasSpeechHistory && recentSilence && !isProcessing && volumeHistory.length >= 6) {
+            console.log('🔇 Client-side turn detection: End of speech detected, processing turn...')
+            turnProcessingRef.current = true
+            
+            // Send process_turn message to server
+            send({
+              type: 'process_turn',
+              timestamp: currentTime
+            })
+            
+            // Reset for next turn
+            setTimeout(() => {
+              turnProcessingRef.current = false
+              recentVolumeHistoryRef.current = []
+              console.log('🔄 Turn processing complete, ready for next turn')
+            }, 3000) // Wait 3s before allowing next turn
+          }
+          
+          // Send audio if above silence threshold
+          if (rms > silenceThreshold) {
             // Convert Float32Array to 16-bit PCM
             const pcmData = new Int16Array(inputData.length)
             for (let i = 0; i < inputData.length; i++) {
@@ -410,7 +540,8 @@ function ConversationAIPage() {
         llmModel: 'llama-2-7b-chat-int8',
         ttsModel: 'aura-1',
         voice: selectedVoice,
-        turnThreshold: 0.7 // Smart Turn v2 confidence threshold
+        turnThreshold: 0.7, // Smart Turn v2 confidence threshold
+        transcriptionMode: transcriptionMode // Add mode to config
       }
     })
   }
@@ -524,6 +655,56 @@ function ConversationAIPage() {
                 </div>
               </div>
 
+              {/* Voice Selection */}
+              <div className='space-y-2'>
+                <Label htmlFor="voice-select">AI Voice</Label>
+                <Select 
+                  value={selectedVoice} 
+                  onValueChange={setSelectedVoice}
+                  disabled={conversationState.phase !== 'idle'}
+                >
+                  <SelectTrigger id="voice-select" className='w-full'>
+                    <SelectValue placeholder="Select AI voice" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="aura-angus">Angus (Male, Warm)</SelectItem>
+                    <SelectItem value="aura-stella">Stella (Female, Smooth)</SelectItem>
+                    <SelectItem value="aura-luna">Luna (Female, Gentle)</SelectItem>
+                    <SelectItem value="aura-orion">Orion (Male, Deep)</SelectItem>
+                    <SelectItem value="aura-arcas">Arcas (Male, Clear)</SelectItem>
+                    <SelectItem value="aura-perseus">Perseus (Male, Strong)</SelectItem>
+                    <SelectItem value="aura-hera">Hera (Female, Authoritative)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Transcription Mode */}
+              <div className='flex items-center justify-between space-x-2'>
+                <Label htmlFor='transcription-mode' className='text-base'>
+                  Transcription Mode
+                </Label>
+                <div className='flex items-center space-x-2'>
+                  <span className='text-sm text-muted-foreground'>Turn</span>
+                  <Switch 
+                    id='transcription-mode'
+                    checked={transcriptionMode === 'live'}
+                    onCheckedChange={(checked) => setTranscriptionMode(checked ? 'live' : 'turn')}
+                    disabled={conversationState.phase !== 'idle'}
+                  />
+                  <span className='text-sm text-muted-foreground'>Live</span>
+                </div>
+              </div>
+              {transcriptionMode === 'live' && (
+                <p className='text-xs text-muted-foreground'>
+                  Shows partial transcription in real-time while you speak
+                </p>
+              )}
+              {transcriptionMode === 'turn' && (
+                <p className='text-xs text-muted-foreground'>
+                  Shows transcription only after you finish speaking
+                </p>
+              )}
+
               {/* Control Buttons */}
               <div className='flex gap-2'>
                 {conversationState.phase === 'idle' ? (
@@ -586,7 +767,9 @@ function ConversationAIPage() {
                       >
                         <div className={`max-w-[80%] rounded-lg p-3 ${
                           turn.type === 'user' 
-                            ? 'bg-primary text-primary-foreground' 
+                            ? turn.isPartial
+                              ? 'bg-primary/70 text-primary-foreground border-2 border-dashed border-primary' 
+                              : 'bg-primary text-primary-foreground'
                             : 'bg-muted'
                         }`}>
                           <div className='flex items-start gap-2'>
@@ -604,6 +787,11 @@ function ConversationAIPage() {
                                 {turn.confidence && (
                                   <Badge variant="secondary" className='text-xs'>
                                     {Math.round(turn.confidence * 100)}% confident
+                                  </Badge>
+                                )}
+                                {turn.isPartial && (
+                                  <Badge variant="outline" className='text-xs animate-pulse border-primary'>
+                                    Live...
                                   </Badge>
                                 )}
                                 {turn.processing && (

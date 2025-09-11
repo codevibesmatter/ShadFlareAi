@@ -25,6 +25,7 @@ import {
   Mic,
   Volume2,
   MessageCircle,
+  Brain,
 } from 'lucide-react'
 import { type SidebarData } from '../types'
 
@@ -95,6 +96,11 @@ export const sidebarData: SidebarData = {
           title: 'Conversation AI',
           url: '/conversation-ai',
           icon: MessageCircle,
+        },
+        {
+          title: 'RAG Knowledge',
+          url: '/rag-knowledge',
+          icon: Brain,
         },
         {
           title: 'Users',
