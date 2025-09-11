@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { showSubmittedData } from '@/lib/show-submitted-data'
+import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -12,6 +12,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
   Sheet,
@@ -24,6 +25,7 @@ import {
 } from '@/components/ui/sheet'
 import { SelectDropdown } from '@/components/select-dropdown'
 import { type Task } from '../data/schema'
+import { useCreateTask, useUpdateTask } from '../hooks/use-tasks'
 
 type TaskMutateDrawerProps = {
   open: boolean
@@ -36,6 +38,7 @@ const formSchema = z.object({
   status: z.string().min(1, 'Please select a status.'),
   label: z.string().min(1, 'Please select a label.'),
   priority: z.string().min(1, 'Please choose a priority.'),
+  description: z.string().optional(),
 })
 type TaskForm = z.infer<typeof formSchema>
 
@@ -45,22 +48,69 @@ export function TasksMutateDrawer({
   currentRow,
 }: TaskMutateDrawerProps) {
   const isUpdate = !!currentRow
+  const createTask = useCreateTask()
+  const updateTask = useUpdateTask()
 
   const form = useForm<TaskForm>({
     resolver: zodResolver(formSchema),
-    defaultValues: currentRow ?? {
+    defaultValues: {
       title: '',
       status: '',
       label: '',
       priority: '',
+      description: '',
     },
   })
 
-  const onSubmit = (data: TaskForm) => {
-    // do something with the form data
-    onOpenChange(false)
-    form.reset()
-    showSubmittedData(data)
+  // Update form when currentRow changes
+  useEffect(() => {
+    if (currentRow) {
+      form.reset({
+        title: currentRow.title,
+        status: currentRow.status,
+        label: currentRow.label || '',
+        priority: currentRow.priority,
+        description: currentRow.description || '',
+      })
+    } else {
+      form.reset({
+        title: '',
+        status: '',
+        label: '',
+        priority: '',
+        description: '',
+      })
+    }
+  }, [currentRow, form])
+
+  const onSubmit = async (data: TaskForm) => {
+    try {
+      if (isUpdate && currentRow) {
+        await updateTask.mutateAsync({
+          id: currentRow.id,
+          data: {
+            title: data.title,
+            status: data.status,
+            label: data.label,
+            priority: data.priority,
+            description: data.description || null,
+          }
+        })
+      } else {
+        await createTask.mutateAsync({
+          title: data.title,
+          status: data.status,
+          label: data.label,
+          priority: data.priority,
+          description: data.description || null,
+        })
+      }
+      onOpenChange(false)
+      form.reset()
+    } catch (error) {
+      // Error handling is done by the hooks via toast
+      console.error('Failed to save task:', error)
+    }
   }
 
   return (
@@ -196,14 +246,36 @@ export function TasksMutateDrawer({
                 </FormItem>
               )}
             />
+            <FormField
+              control={form.control}
+              name='description'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Description (Optional)</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      {...field}
+                      placeholder='Enter task description...'
+                      className='resize-none'
+                      rows={3}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
           </form>
         </Form>
         <SheetFooter className='gap-2'>
           <SheetClose asChild>
             <Button variant='outline'>Close</Button>
           </SheetClose>
-          <Button form='tasks-form' type='submit'>
-            Save changes
+          <Button 
+            form='tasks-form' 
+            type='submit'
+            disabled={createTask.isPending || updateTask.isPending}
+          >
+            {(createTask.isPending || updateTask.isPending) ? 'Saving...' : 'Save changes'}
           </Button>
         </SheetFooter>
       </SheetContent>

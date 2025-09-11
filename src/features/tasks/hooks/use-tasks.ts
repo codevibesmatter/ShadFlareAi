@@ -174,3 +174,69 @@ export function useDeleteTask() {
     },
   })
 }
+
+export function useBulkDeleteTasks() {
+  const queryClient = useQueryClient()
+  
+  return useMutation({
+    mutationFn: async (taskIds: string[]) => {
+      // Delete tasks in parallel
+      const deletePromises = taskIds.map(id => tasksApi.deleteTask(id))
+      await Promise.all(deletePromises)
+      return taskIds
+    },
+    onSuccess: (deletedTaskIds) => {
+      // Remove the tasks from list cache
+      queryClient.setQueryData<Task[]>(tasksKeys.lists(), (old) => {
+        if (!old) return []
+        return old.filter(task => !deletedTaskIds.includes(task.id))
+      })
+      
+      // Remove the specific task caches
+      deletedTaskIds.forEach(id => {
+        queryClient.removeQueries({ queryKey: tasksKeys.detail(id) })
+      })
+      
+      toast.success(`${deletedTaskIds.length} task${deletedTaskIds.length > 1 ? 's' : ''} deleted successfully`)
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to delete tasks')
+    },
+  })
+}
+
+export function useBulkUpdateTasks() {
+  const queryClient = useQueryClient()
+  
+  return useMutation({
+    mutationFn: async ({ taskIds, updates }: { 
+      taskIds: string[], 
+      updates: Partial<Omit<Task, 'id' | 'userId' | 'createdAt' | 'updatedAt'>> 
+    }) => {
+      // Update tasks in parallel
+      const updatePromises = taskIds.map(id => tasksApi.updateTask(id, updates))
+      const updatedTasks = await Promise.all(updatePromises)
+      return updatedTasks
+    },
+    onSuccess: (updatedTasks) => {
+      // Update the tasks in list cache
+      queryClient.setQueryData<Task[]>(tasksKeys.lists(), (old) => {
+        if (!old) return updatedTasks
+        return old.map(task => {
+          const updatedTask = updatedTasks.find(ut => ut.id === task.id)
+          return updatedTask || task
+        })
+      })
+      
+      // Update individual task caches
+      updatedTasks.forEach(updatedTask => {
+        queryClient.setQueryData<Task>(tasksKeys.detail(updatedTask.id), updatedTask)
+      })
+      
+      toast.success(`${updatedTasks.length} task${updatedTasks.length > 1 ? 's' : ''} updated successfully`)
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to update tasks')
+    },
+  })
+}

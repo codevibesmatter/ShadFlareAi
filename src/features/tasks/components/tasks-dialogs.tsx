@@ -1,11 +1,27 @@
-import { showSubmittedData } from '@/lib/show-submitted-data'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { TasksImportDialog } from './tasks-import-dialog'
 import { TasksMutateDrawer } from './tasks-mutate-drawer'
 import { useTasks } from './tasks-provider'
+import { useDeleteTask } from '../hooks/use-tasks'
 
 export function TasksDialogs() {
   const { open, setOpen, currentRow, setCurrentRow } = useTasks()
+  const deleteTask = useDeleteTask()
+
+  const handleDelete = async () => {
+    if (!currentRow) return
+    
+    try {
+      await deleteTask.mutateAsync(currentRow.id)
+      setOpen(null)
+      setTimeout(() => {
+        setCurrentRow(null)
+      }, 500)
+    } catch (error) {
+      console.error('Failed to delete task:', error)
+    }
+  }
+
   return (
     <>
       <TasksMutateDrawer
@@ -44,26 +60,18 @@ export function TasksDialogs() {
                 setCurrentRow(null)
               }, 500)
             }}
-            handleConfirm={() => {
-              setOpen(null)
-              setTimeout(() => {
-                setCurrentRow(null)
-              }, 500)
-              showSubmittedData(
-                currentRow,
-                'The following task has been deleted:'
-              )
-            }}
+            handleConfirm={handleDelete}
             className='max-w-md'
             title={`Delete this task: ${currentRow.id} ?`}
             desc={
               <>
-                You are about to delete a task with the ID{' '}
+                You are about to delete the task "{currentRow.title}" with ID{' '}
                 <strong>{currentRow.id}</strong>. <br />
                 This action cannot be undone.
               </>
             }
-            confirmText='Delete'
+            confirmText={deleteTask.isPending ? 'Deleting...' : 'Delete'}
+            disabled={deleteTask.isPending}
           />
         </>
       )}

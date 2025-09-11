@@ -4,11 +4,12 @@ import { useState } from 'react'
 import { type Table } from '@tanstack/react-table'
 import { AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
-import { sleep } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { type Task } from '../data/schema'
+import { useBulkDeleteTasks } from '../hooks/use-tasks'
 
 type TaskMultiDeleteDialogProps<TData> = {
   open: boolean
@@ -24,27 +25,25 @@ export function TasksMultiDeleteDialog<TData>({
   table,
 }: TaskMultiDeleteDialogProps<TData>) {
   const [value, setValue] = useState('')
+  const bulkDeleteTasks = useBulkDeleteTasks()
 
   const selectedRows = table.getFilteredSelectedRowModel().rows
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (value.trim() !== CONFIRM_WORD) {
       toast.error(`Please type "${CONFIRM_WORD}" to confirm.`)
       return
     }
 
-    onOpenChange(false)
-
-    toast.promise(sleep(2000), {
-      loading: 'Deleting tasks...',
-      success: () => {
-        table.resetRowSelection()
-        return `Deleted ${selectedRows.length} ${
-          selectedRows.length > 1 ? 'tasks' : 'task'
-        }`
-      },
-      error: 'Error',
-    })
+    try {
+      const taskIds = selectedRows.map(row => (row.original as Task).id)
+      await bulkDeleteTasks.mutateAsync(taskIds)
+      onOpenChange(false)
+      setValue('')
+      table.resetRowSelection()
+    } catch (error) {
+      console.error('Failed to delete tasks:', error)
+    }
   }
 
   return (
@@ -52,7 +51,7 @@ export function TasksMultiDeleteDialog<TData>({
       open={open}
       onOpenChange={onOpenChange}
       handleConfirm={handleDelete}
-      disabled={value.trim() !== CONFIRM_WORD}
+      disabled={value.trim() !== CONFIRM_WORD || bulkDeleteTasks.isPending}
       title={
         <span className='text-destructive'>
           <AlertTriangle
@@ -87,7 +86,7 @@ export function TasksMultiDeleteDialog<TData>({
           </Alert>
         </div>
       }
-      confirmText='Delete'
+      confirmText={bulkDeleteTasks.isPending ? 'Deleting...' : 'Delete'}
       destructive
     />
   )

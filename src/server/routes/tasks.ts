@@ -37,9 +37,9 @@ tasksApp.openapi(getTasksRoute, async (c) => {
     // Convert timestamps to ISO strings
     const tasksWithDates = tasks.map(t => ({
       ...t,
-      dueDate: t.dueDate ? new Date(t.dueDate * 1000).toISOString() : null,
-      createdAt: new Date(t.createdAt * 1000).toISOString(),
-      updatedAt: new Date(t.updatedAt * 1000).toISOString(),
+      dueDate: t.dueDate ? (t.dueDate instanceof Date ? t.dueDate.toISOString() : new Date(t.dueDate).toISOString()) : null,
+      createdAt: t.createdAt instanceof Date ? t.createdAt.toISOString() : new Date(t.createdAt).toISOString(),
+      updatedAt: t.updatedAt instanceof Date ? t.updatedAt.toISOString() : new Date(t.updatedAt).toISOString(),
     }))
 
     return c.json(tasksWithDates)
@@ -69,9 +69,9 @@ tasksApp.openapi(getTaskRoute, async (c) => {
     // Convert timestamps to ISO strings
     const taskWithDates = {
       ...taskRecord,
-      dueDate: taskRecord.dueDate ? new Date(taskRecord.dueDate * 1000).toISOString() : null,
-      createdAt: new Date(taskRecord.createdAt * 1000).toISOString(),
-      updatedAt: new Date(taskRecord.updatedAt * 1000).toISOString(),
+      dueDate: taskRecord.dueDate ? (taskRecord.dueDate instanceof Date ? taskRecord.dueDate.toISOString() : new Date(taskRecord.dueDate).toISOString()) : null,
+      createdAt: taskRecord.createdAt instanceof Date ? taskRecord.createdAt.toISOString() : new Date(taskRecord.createdAt).toISOString(),
+      updatedAt: taskRecord.updatedAt instanceof Date ? taskRecord.updatedAt.toISOString() : new Date(taskRecord.updatedAt).toISOString(),
     }
 
     return c.json(taskWithDates)
@@ -97,19 +97,19 @@ tasksApp.openapi(createTaskRoute, async (c) => {
       label: body.label || null,
       priority: body.priority || 'medium',
       assignee: body.assignee || null,
-      dueDate: body.dueDate ? Math.floor(new Date(body.dueDate).getTime() / 1000) : null,
-      createdAt: Math.floor(Date.now() / 1000),
-      updatedAt: Math.floor(Date.now() / 1000),
+      dueDate: body.dueDate ? new Date(body.dueDate) : null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
     }
 
     await db.insert(task).values(newTask)
 
-    // Return task with converted timestamps
+    // Return task with ISO string timestamps
     const taskWithDates = {
       ...newTask,
-      dueDate: newTask.dueDate ? new Date(newTask.dueDate * 1000).toISOString() : null,
-      createdAt: new Date(newTask.createdAt * 1000).toISOString(),
-      updatedAt: new Date(newTask.updatedAt * 1000).toISOString(),
+      dueDate: newTask.dueDate ? newTask.dueDate.toISOString() : null,
+      createdAt: newTask.createdAt.toISOString(),
+      updatedAt: newTask.updatedAt.toISOString(),
     }
 
     return c.json(taskWithDates, 201)
@@ -139,7 +139,7 @@ tasksApp.openapi(updateTaskRoute, async (c) => {
     }
 
     const updateData: Partial<typeof task.$inferInsert> = {
-      updatedAt: Math.floor(Date.now() / 1000),
+      updatedAt: new Date(),
     }
 
     if (body.title !== undefined) updateData.title = body.title
@@ -149,7 +149,7 @@ tasksApp.openapi(updateTaskRoute, async (c) => {
     if (body.priority !== undefined) updateData.priority = body.priority
     if (body.assignee !== undefined) updateData.assignee = body.assignee
     if (body.dueDate !== undefined) {
-      updateData.dueDate = body.dueDate ? Math.floor(new Date(body.dueDate).getTime() / 1000) : null
+      updateData.dueDate = body.dueDate ? new Date(body.dueDate) : null
     }
 
     await db
@@ -167,9 +167,9 @@ tasksApp.openapi(updateTaskRoute, async (c) => {
     // Convert timestamps to ISO strings
     const taskWithDates = {
       ...updatedTask!,
-      dueDate: updatedTask!.dueDate ? new Date(updatedTask!.dueDate * 1000).toISOString() : null,
-      createdAt: new Date(updatedTask!.createdAt * 1000).toISOString(),
-      updatedAt: new Date(updatedTask!.updatedAt * 1000).toISOString(),
+      dueDate: updatedTask!.dueDate ? (updatedTask!.dueDate instanceof Date ? updatedTask!.dueDate.toISOString() : new Date(updatedTask!.dueDate).toISOString()) : null,
+      createdAt: updatedTask!.createdAt instanceof Date ? updatedTask!.createdAt.toISOString() : new Date(updatedTask!.createdAt).toISOString(),
+      updatedAt: updatedTask!.updatedAt instanceof Date ? updatedTask!.updatedAt.toISOString() : new Date(updatedTask!.updatedAt).toISOString(),
     }
 
     return c.json(taskWithDates)
